@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-provisioner
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-provisioner
+  template:
+    metadata:
+      labels:
+        app: postgres-provisioner
+    spec:
+      serviceAccountName: postgres-provisioner
+      containers:
+        - name: controller
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          env:
+            - name: PG_HOST
+              value: {{ .Values.postgres.host }}
+            - name: PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.secretName }}
+                  key: username
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.secretName }}
+                  key: password

@@ -1,0 +1,3 @@
+kopf
+psycopg2-binary
+kubernetes

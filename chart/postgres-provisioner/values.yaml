@@ -1,0 +1,9 @@
+image:
+  repository: drewsonne/postgres-provisioner
+  tag: latest
+
+postgres:
+  host: pg-rw.app-db.svc.cluster.local
+  secretName: pg-superuser
+
+namespace: app-db

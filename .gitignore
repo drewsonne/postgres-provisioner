@@ -1,0 +1,68 @@
+# ----------------------
+# Python
+# ----------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.egg-info/
+.eggs/
+dist/
+build/
+*.log
+
+# Virtual environments
+venv/
+.env/
+.venv/
+env/
+
+# ----------------------
+# Docker
+# ----------------------
+*.tar
+*.tar.gz
+
+# ----------------------
+# Helm
+# ----------------------
+# packaged charts
+*.tgz
+
+# Helm cache / temp
+charts/
+*.lock
+
+# ----------------------
+# Kubernetes / local configs
+# ----------------------
+*.kubeconfig
+kubeconfig
+
+# ----------------------
+# IDEs / editors
+# ----------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ----------------------
+# OS files
+# ----------------------
+.DS_Store
+Thumbs.db
+
+# ----------------------
+# Logs
+# ----------------------
+*.log
+
+# ----------------------
+# Misc
+# ----------------------
+.envrc
+*.bak
+*.tmp
