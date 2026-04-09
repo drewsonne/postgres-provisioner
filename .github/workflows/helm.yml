@@ -1,34 +1,46 @@
 name: Publish Helm Chart
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - "chart/**"
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    types:
+      - completed
 
 jobs:
   release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write   # required for gh-pages push
+      contents: write
 
     steps:
-      - name: Checkout
+      - name: Checkout repo at same commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
+
+      - name: Extract image tag (commit SHA)
+        id: vars
+        run: echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
+
+      - name: Update chart appVersion
+        run: |
+          sed -i "s/^appVersion:.*/appVersion: \"${IMAGE_TAG}\"/" chart/postgres-provisioner/Chart.yaml
 
       - name: Package chart
         run: |
           helm package chart/postgres-provisioner
 
-      - name: Create index.yaml
+      - name: Prepare repo index
         run: |
           mkdir -p .cr-release-packages
           mv *.tgz .cr-release-packages/
-          helm repo index .cr-release-packages --url https://drewsonne.github.io/postgres-provisioner
+          helm repo index .cr-release-packages \
+            --url https://drewsonne.github.io/postgres-provisioner
 
       - name: Publish to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
