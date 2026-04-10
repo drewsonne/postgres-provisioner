@@ -10,10 +10,10 @@ kind: ClusterRole
 metadata:
   name: postgres-provisioner
 rules:
-  - apiGroups: ["db.example.com"]
+  - apiGroups: ["pgprovisioner.drewsonne.github.io"]
     resources: ["postgresdatabases"]
     verbs: ["get", "list", "watch", "patch"]
-  - apiGroups: ["db.example.com"]
+  - apiGroups: ["pgprovisioner.drewsonne.github.io"]
     resources: ["postgresdatabases/status"]
     verbs: ["get", "patch", "update"]
   - apiGroups: [""]

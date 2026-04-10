@@ -89,7 +89,7 @@ helm install db-provisioner \
 Create a database:
 
 ```yaml
-apiVersion: db.example.com/v1
+apiVersion: pgprovisioner.drewsonne.github.io/v1
 kind: PostgresDatabase
 metadata:
   name: example

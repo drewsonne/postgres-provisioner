@@ -160,7 +160,7 @@ def _secret_data(user: str, password: str, db: str) -> dict[str, str]:
 def configure(settings: kopf.OperatorSettings, **_: Any) -> None:
     settings.peering.standalone = True
     settings.posting.level = logging.WARNING
-    settings.persistence.finalizer = "db.example.com/finalizer"
+    settings.persistence.finalizer = "pgprovisioner.drewsonne.github.io/finalizer"
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ def configure(settings: kopf.OperatorSettings, **_: Any) -> None:
 
 
 @kopf.on.create(
-    "db.example.com", "v1", "postgresdatabases", retries=5, backoff=30, timeout=300
+    "pgprovisioner.drewsonne.github.io", "v1", "postgresdatabases", retries=5, backoff=30, timeout=300
 )
 def create_fn(
     spec: kopf.Spec,
@@ -210,7 +210,7 @@ def create_fn(
     return {"database": db, "owner": user, "ready": True}
 
 
-@kopf.on.resume("db.example.com", "v1", "postgresdatabases")
+@kopf.on.resume("pgprovisioner.drewsonne.github.io", "v1", "postgresdatabases")
 def resume_fn(
     spec: kopf.Spec,
     name: str,
@@ -260,7 +260,7 @@ def resume_fn(
 
 
 @kopf.on.delete(
-    "db.example.com", "v1", "postgresdatabases", retries=3, backoff=15, timeout=120
+    "pgprovisioner.drewsonne.github.io", "v1", "postgresdatabases", retries=3, backoff=15, timeout=120
 )
 def delete_fn(
     spec: kopf.Spec,
@@ -285,7 +285,7 @@ def delete_fn(
 
 
 @kopf.on.update(
-    "db.example.com", "v1", "postgresdatabases", field="spec", retries=3, backoff=15
+    "pgprovisioner.drewsonne.github.io", "v1", "postgresdatabases", field="spec", retries=3, backoff=15
 )
 def update_fn(
     spec: kopf.Spec,
@@ -328,7 +328,7 @@ def update_fn(
     return {"database": db, "owner": user, "ready": True}
 
 
-@kopf.timer("db.example.com", "v1", "postgresdatabases", interval=300, initial_delay=60)
+@kopf.timer("pgprovisioner.drewsonne.github.io", "v1", "postgresdatabases", interval=300, initial_delay=60)
 def check_drift(
     spec: kopf.Spec,
     logger: kopf.Logger,
