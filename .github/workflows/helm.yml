@@ -49,6 +49,17 @@ jobs:
           mv *.tgz .cr-release-packages/
           helm repo index .cr-release-packages \
             --url https://drewsonne.github.io/postgres-provisioner
+          cat > .cr-release-packages/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html><head><meta charset="utf-8"><title>postgres-provisioner Helm repo</title></head>
+          <body>
+          <h1>postgres-provisioner</h1>
+          <p>Helm chart repository. To use:</p>
+          <pre>helm repo add postgres-provisioner https://drewsonne.github.io/postgres-provisioner
+          helm install postgres-provisioner postgres-provisioner/postgres-provisioner</pre>
+          <p><a href="index.yaml">index.yaml</a></p>
+          </body></html>
+          EOF
 
       - name: Publish to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
