@@ -6,6 +6,7 @@ name: Build and Push Docker Image
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 jobs:
   build:
