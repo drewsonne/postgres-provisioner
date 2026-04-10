@@ -149,8 +149,7 @@ psql -h pg-rw.app-db.svc.cluster.local \
 
 ## Limitations (current)
 
-* No delete handling (database is not dropped)
-* No password stability (rotates on update)
+* No delete handling (database is not dropped on CR deletion — by design)
 * No schema-level isolation (database-level only)
 * No connection pooling
 
