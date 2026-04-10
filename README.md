@@ -191,9 +191,6 @@ docker run --rm \
 
 ## Roadmap / Improvements
 
-* Stable password management
-* Delete lifecycle (drop database/user)
-* Status fields on CRD
 * Connection pooling support
 * Multi-cluster / multi-tenant support
 

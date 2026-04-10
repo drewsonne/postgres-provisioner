@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import secrets
@@ -42,12 +43,14 @@ def _connect() -> psycopg2.extensions.connection:
         )
     except psycopg2.OperationalError as exc:
         raise kopf.TemporaryError(
-            f"Cannot connect to PostgreSQL: {exc}", delay=30
+            f"Cannot connect to PostgreSQL: {exc}",
+            delay=30,
         ) from exc
 
 
 def _database_exists(
-    cur: psycopg2.extensions.cursor, name: str
+    cur: psycopg2.extensions.cursor,
+    name: str,
 ) -> bool:
     cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (name,))
     return cur.fetchone() is not None
@@ -66,7 +69,7 @@ def _ensure_role(
     if not _role_exists(cur, role):
         cur.execute(
             sql.SQL("CREATE ROLE {} LOGIN PASSWORD %s").format(
-                sql.Identifier(role)
+                sql.Identifier(role),
             ),
             (password,),
         )
@@ -82,8 +85,28 @@ def _ensure_database(
             sql.SQL("CREATE DATABASE {} OWNER {}").format(
                 sql.Identifier(db),
                 sql.Identifier(owner),
-            )
+            ),
         )
+
+
+def _get_existing_password(
+    namespace: str,
+    secret_name: str,
+) -> str | None:
+    """Read the password from an existing Kubernetes secret, or return None."""
+    v1 = kubernetes.client.CoreV1Api()
+    try:
+        secret = v1.read_namespaced_secret(name=secret_name, namespace=namespace)
+        raw = (secret.data or {}).get("password")
+        if raw:
+            return base64.b64decode(raw).decode()
+    except kubernetes.client.exceptions.ApiException as exc:
+        if exc.status != 404:
+            raise kopf.TemporaryError(
+                f"Failed reading secret {secret_name}: {exc}",
+                delay=15,
+            ) from exc
+    return None
 
 
 def _ensure_secret(
@@ -113,7 +136,8 @@ def _ensure_secret(
             logger.info("Updated existing secret %s", secret_name)
         else:
             raise kopf.TemporaryError(
-                f"Kubernetes API error creating secret: {exc}", delay=15
+                f"Kubernetes API error creating secret: {exc}",
+                delay=15,
             ) from exc
 
 
@@ -131,6 +155,7 @@ def _secret_data(user: str, password: str, db: str) -> dict[str, str]:
 # Operator settings
 # ---------------------------------------------------------------------------
 
+
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_: Any) -> None:
     settings.peering.standalone = True
@@ -142,8 +167,10 @@ def configure(settings: kopf.OperatorSettings, **_: Any) -> None:
 # Handlers
 # ---------------------------------------------------------------------------
 
-@kopf.on.resume("db.example.com", "v1", "postgresdatabases")
-@kopf.on.create("db.example.com", "v1", "postgresdatabases", retries=5, backoff=30, timeout=300)
+
+@kopf.on.create(
+    "db.example.com", "v1", "postgresdatabases", retries=5, backoff=30, timeout=300
+)
 def create_fn(
     spec: kopf.Spec,
     name: str,
@@ -159,7 +186,7 @@ def create_fn(
     _validate_identifier(db)
     _validate_identifier(user)
 
-    password = _rand_pw()
+    password = _get_existing_password(namespace, secret_name) or _rand_pw()
 
     conn = _connect()
     try:
@@ -169,18 +196,72 @@ def create_fn(
             _ensure_database(cur, db, user)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
-            f"PostgreSQL error: {exc}", delay=30
+            f"PostgreSQL error: {exc}",
+            delay=30,
         ) from exc
     finally:
         conn.close()
 
-    _ensure_secret(namespace, secret_name, body, _secret_data(user, password, db), logger)
+    _ensure_secret(
+        namespace, secret_name, body, _secret_data(user, password, db), logger
+    )
 
     logger.info("Provisioned database=%s owner=%s", db, user)
     return {"database": db, "owner": user, "ready": True}
 
 
-@kopf.on.delete("db.example.com", "v1", "postgresdatabases", retries=3, backoff=15, timeout=120)
+@kopf.on.resume("db.example.com", "v1", "postgresdatabases")
+def resume_fn(
+    spec: kopf.Spec,
+    name: str,
+    namespace: str,
+    logger: kopf.Logger,
+    **_: Any,
+) -> dict[str, Any]:
+    """Re-verify resources exist on operator restart without changing passwords."""
+    db = spec["dbName"]
+    user = spec["owner"]
+    secret_name = spec["secretName"]
+
+    _validate_identifier(db)
+    _validate_identifier(user)
+
+    password = _get_existing_password(namespace, secret_name)
+    if password is None:
+        raise kopf.TemporaryError(
+            f"Secret {secret_name} not found during resume; will retry",
+            delay=30,
+        )
+
+    conn = _connect()
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            if not _role_exists(cur, user):
+                raise kopf.TemporaryError(
+                    f"Role {user} missing during resume; will retry",
+                    delay=30,
+                )
+            if not _database_exists(cur, db):
+                raise kopf.TemporaryError(
+                    f"Database {db} missing during resume; will retry",
+                    delay=30,
+                )
+    except psycopg2.Error as exc:
+        raise kopf.TemporaryError(
+            f"PostgreSQL error: {exc}",
+            delay=30,
+        ) from exc
+    finally:
+        conn.close()
+
+    logger.info("Resumed database=%s owner=%s", db, user)
+    return {"database": db, "owner": user, "ready": True}
+
+
+@kopf.on.delete(
+    "db.example.com", "v1", "postgresdatabases", retries=3, backoff=15, timeout=120
+)
 def delete_fn(
     spec: kopf.Spec,
     name: str,
@@ -197,12 +278,15 @@ def delete_fn(
     except kubernetes.client.exceptions.ApiException as exc:
         if exc.status != 404:
             raise kopf.TemporaryError(
-                f"Failed to delete secret: {exc}", delay=15
+                f"Failed to delete secret: {exc}",
+                delay=15,
             ) from exc
         logger.info("Secret %s already absent", secret_name)
 
 
-@kopf.on.update("db.example.com", "v1", "postgresdatabases", field="spec", retries=3, backoff=15)
+@kopf.on.update(
+    "db.example.com", "v1", "postgresdatabases", field="spec", retries=3, backoff=15
+)
 def update_fn(
     spec: kopf.Spec,
     name: str,
@@ -220,7 +304,7 @@ def update_fn(
     _validate_identifier(db)
     _validate_identifier(user)
 
-    password = _rand_pw()
+    password = _get_existing_password(namespace, secret_name) or _rand_pw()
 
     conn = _connect()
     try:
@@ -230,12 +314,15 @@ def update_fn(
             _ensure_database(cur, db, user)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
-            f"PostgreSQL error: {exc}", delay=30
+            f"PostgreSQL error: {exc}",
+            delay=30,
         ) from exc
     finally:
         conn.close()
 
-    _ensure_secret(namespace, secret_name, body, _secret_data(user, password, db), logger)
+    _ensure_secret(
+        namespace, secret_name, body, _secret_data(user, password, db), logger
+    )
 
     logger.info("Reconciled database=%s owner=%s", db, user)
     return {"database": db, "owner": user, "ready": True}
@@ -258,7 +345,8 @@ def check_drift(
             role_ok = _role_exists(cur, user)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
-            f"Drift check failed: {exc}", delay=60
+            f"Drift check failed: {exc}",
+            delay=60,
         ) from exc
     finally:
         conn.close()
@@ -266,7 +354,10 @@ def check_drift(
     if not db_ok or not role_ok:
         logger.warning(
             "Drift detected: database=%s(%s) role=%s(%s)",
-            db, db_ok, user, role_ok,
+            db,
+            db_ok,
+            user,
+            role_ok,
         )
         return {"database": db, "owner": user, "ready": False, "drift": True}
 
