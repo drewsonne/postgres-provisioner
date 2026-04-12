@@ -6,8 +6,6 @@ from typing import Any
 
 import kopf
 import psycopg2
-from psycopg2 import sql
-
 from common import (
     CRD_GROUP,
     CRD_VERSION,
@@ -22,6 +20,7 @@ from common import (
     secret_data,
     validate_identifier,
 )
+from psycopg2 import sql
 
 
 def _ensure_database(

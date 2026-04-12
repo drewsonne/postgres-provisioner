@@ -6,8 +6,6 @@ from typing import Any
 
 import kopf
 import psycopg2
-from psycopg2 import sql
-
 from common import (
     CRD_GROUP,
     CRD_VERSION,
@@ -23,6 +21,7 @@ from common import (
     secret_data,
     validate_identifier,
 )
+from psycopg2 import sql
 
 _VALID_ACCESS = frozenset({"read", "readwrite"})
 
@@ -43,6 +42,20 @@ def _list_user_schemas(cur: psycopg2.extensions.cursor) -> list[str]:
     return [row[0] for row in cur.fetchall()]
 
 
+def _schema_owners(
+    cur: psycopg2.extensions.cursor,
+    schema_name: str,
+) -> list[str]:
+    """Return distinct owner role names that own objects in *schema_name*."""
+    cur.execute(
+        "SELECT DISTINCT pg_get_userbyid(relowner) "
+        "FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid "
+        "WHERE n.nspname = %s",
+        (schema_name,),
+    )
+    return [row[0] for row in cur.fetchall()]
+
+
 def _grant_access(
     cur: psycopg2.extensions.cursor,
     username: str,
@@ -53,6 +66,10 @@ def _grant_access(
 
     Must be called on a connection to the *target* database (not ``postgres``).
     If *schemas* is ``None``, grants on all user schemas.
+
+    Sets ``ALTER DEFAULT PRIVILEGES`` both for the current user *and* for every
+    role that already owns objects in each schema so that future objects created
+    by any of those roles are automatically accessible.
     """
     role = sql.Identifier(username)
     if schemas is None:
@@ -60,6 +77,7 @@ def _grant_access(
 
     for schema_name in schemas:
         schema = sql.Identifier(schema_name)
+        owners = _schema_owners(cur, schema_name)
         cur.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, role))
 
         if access == "read":
@@ -68,12 +86,21 @@ def _grant_access(
                     "GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}",
                 ).format(schema, role),
             )
+            # Default privileges for current user (postgres)
             cur.execute(
                 sql.SQL(
                     "ALTER DEFAULT PRIVILEGES IN SCHEMA {} "
                     "GRANT SELECT ON TABLES TO {}",
                 ).format(schema, role),
             )
+            # Default privileges for each role that owns objects in the schema
+            for owner in owners:
+                cur.execute(
+                    sql.SQL(
+                        "ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA {} "
+                        "GRANT SELECT ON TABLES TO {}",
+                    ).format(sql.Identifier(owner), schema, role),
+                )
         else:
             # readwrite
             cur.execute(
@@ -90,6 +117,7 @@ def _grant_access(
                     "GRANT USAGE ON ALL SEQUENCES IN SCHEMA {} TO {}",
                 ).format(schema, role),
             )
+            # Default privileges for current user (postgres)
             cur.execute(
                 sql.SQL(
                     "ALTER DEFAULT PRIVILEGES IN SCHEMA {} "
@@ -102,6 +130,20 @@ def _grant_access(
                     "GRANT USAGE ON SEQUENCES TO {}",
                 ).format(schema, role),
             )
+            # Default privileges for each role that owns objects in the schema
+            for owner in owners:
+                cur.execute(
+                    sql.SQL(
+                        "ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA {} "
+                        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {}",
+                    ).format(sql.Identifier(owner), schema, role),
+                )
+                cur.execute(
+                    sql.SQL(
+                        "ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA {} "
+                        "GRANT USAGE ON SEQUENCES TO {}",
+                    ).format(sql.Identifier(owner), schema, role),
+                )
 
 
 def _revoke_access(
@@ -119,6 +161,8 @@ def _revoke_access(
 
     for schema_name in schemas:
         schema = sql.Identifier(schema_name)
+        owners = _schema_owners(cur, schema_name)
+        # Revoke default privileges for current user
         cur.execute(
             sql.SQL(
                 "ALTER DEFAULT PRIVILEGES IN SCHEMA {} REVOKE ALL ON TABLES FROM {}",
@@ -129,14 +173,30 @@ def _revoke_access(
                 "ALTER DEFAULT PRIVILEGES IN SCHEMA {} REVOKE ALL ON SEQUENCES FROM {}",
             ).format(schema, role),
         )
+        # Revoke default privileges for each object-owning role
+        for owner in owners:
+            cur.execute(
+                sql.SQL(
+                    "ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA {} "
+                    "REVOKE ALL ON TABLES FROM {}",
+                ).format(sql.Identifier(owner), schema, role),
+            )
+            cur.execute(
+                sql.SQL(
+                    "ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA {} "
+                    "REVOKE ALL ON SEQUENCES FROM {}",
+                ).format(sql.Identifier(owner), schema, role),
+            )
         cur.execute(
             sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}").format(
-                schema, role,
+                schema,
+                role,
             ),
         )
         cur.execute(
             sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA {} FROM {}").format(
-                schema, role,
+                schema,
+                role,
             ),
         )
         cur.execute(
@@ -229,8 +289,16 @@ def user_create_fn(
         logger,
     )
 
-    logger.info("Provisioned user=%s db=%s access=%s schemas=%s", username, db, access, schemas)
-    return {"username": username, "database": db, "access": access, "schemas": schemas, "ready": True}
+    logger.info(
+        "Provisioned user=%s db=%s access=%s schemas=%s", username, db, access, schemas
+    )
+    return {
+        "username": username,
+        "database": db,
+        "access": access,
+        "schemas": schemas,
+        "ready": True,
+    }
 
 
 @kopf.on.resume(CRD_GROUP, CRD_VERSION, "postgresusers")
@@ -284,8 +352,16 @@ def user_resume_fn(
     finally:
         conn.close()
 
-    logger.info("Resumed user=%s db=%s access=%s schemas=%s", username, db, access, schemas)
-    return {"username": username, "database": db, "access": access, "schemas": schemas, "ready": True}
+    logger.info(
+        "Resumed user=%s db=%s access=%s schemas=%s", username, db, access, schemas
+    )
+    return {
+        "username": username,
+        "database": db,
+        "access": access,
+        "schemas": schemas,
+        "ready": True,
+    }
 
 
 @kopf.on.update(
@@ -371,8 +447,16 @@ def user_update_fn(
         logger,
     )
 
-    logger.info("Reconciled user=%s db=%s access=%s schemas=%s", username, db, access, schemas)
-    return {"username": username, "database": db, "access": access, "schemas": schemas, "ready": True}
+    logger.info(
+        "Reconciled user=%s db=%s access=%s schemas=%s", username, db, access, schemas
+    )
+    return {
+        "username": username,
+        "database": db,
+        "access": access,
+        "schemas": schemas,
+        "ready": True,
+    }
 
 
 @kopf.on.delete(

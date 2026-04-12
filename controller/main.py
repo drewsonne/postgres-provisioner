@@ -8,11 +8,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import kopf
-
 import databases  # noqa: F401 — registers PostgresDatabase handlers
+import kopf
 import users  # noqa: F401 — registers PostgresUser handlers
-
 
 # ---------------------------------------------------------------------------
 # Operator settings
