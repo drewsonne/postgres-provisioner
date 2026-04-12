@@ -108,6 +108,13 @@ def _ensure_role(
             ),
             (password,),
         )
+    else:
+        cur.execute(
+            sql.SQL("ALTER ROLE {} PASSWORD %s").format(
+                sql.Identifier(role),
+            ),
+            (password,),
+        )
 
 
 def _ensure_database(
