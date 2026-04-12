@@ -33,90 +33,115 @@ def _validate_access(access: str) -> None:
         raise kopf.PermanentError(msg)
 
 
+def _list_user_schemas(cur: psycopg2.extensions.cursor) -> list[str]:
+    """Return all non-system schema names in the current database."""
+    cur.execute(
+        "SELECT nspname FROM pg_namespace "
+        "WHERE nspname NOT LIKE 'pg_%' "
+        "AND nspname != 'information_schema'",
+    )
+    return [row[0] for row in cur.fetchall()]
+
+
 def _grant_access(
     cur: psycopg2.extensions.cursor,
     username: str,
     access: str,
+    schemas: list[str] | None = None,
 ) -> None:
     """Grant schema-level privileges on the connected database.
 
     Must be called on a connection to the *target* database (not ``postgres``).
+    If *schemas* is ``None``, grants on all user schemas.
     """
     role = sql.Identifier(username)
+    if schemas is None:
+        schemas = _list_user_schemas(cur)
 
-    # Both levels get USAGE on public
-    cur.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(role))
+    for schema_name in schemas:
+        schema = sql.Identifier(schema_name)
+        cur.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, role))
 
-    if access == "read":
-        cur.execute(
-            sql.SQL(
-                "GRANT SELECT ON ALL TABLES IN SCHEMA public TO {}",
-            ).format(role),
-        )
-        cur.execute(
-            sql.SQL(
-                "ALTER DEFAULT PRIVILEGES IN SCHEMA public "
-                "GRANT SELECT ON TABLES TO {}",
-            ).format(role),
-        )
-    else:
-        # readwrite
-        cur.execute(
-            sql.SQL(
-                "GRANT CREATE ON SCHEMA public TO {}",
-            ).format(role),
-        )
-        cur.execute(
-            sql.SQL(
-                "GRANT SELECT, INSERT, UPDATE, DELETE "
-                "ON ALL TABLES IN SCHEMA public TO {}",
-            ).format(role),
-        )
-        cur.execute(
-            sql.SQL(
-                "GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO {}",
-            ).format(role),
-        )
-        cur.execute(
-            sql.SQL(
-                "ALTER DEFAULT PRIVILEGES IN SCHEMA public "
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {}",
-            ).format(role),
-        )
-        cur.execute(
-            sql.SQL(
-                "ALTER DEFAULT PRIVILEGES IN SCHEMA public "
-                "GRANT USAGE ON SEQUENCES TO {}",
-            ).format(role),
-        )
+        if access == "read":
+            cur.execute(
+                sql.SQL(
+                    "GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}",
+                ).format(schema, role),
+            )
+            cur.execute(
+                sql.SQL(
+                    "ALTER DEFAULT PRIVILEGES IN SCHEMA {} "
+                    "GRANT SELECT ON TABLES TO {}",
+                ).format(schema, role),
+            )
+        else:
+            # readwrite
+            cur.execute(
+                sql.SQL("GRANT CREATE ON SCHEMA {} TO {}").format(schema, role),
+            )
+            cur.execute(
+                sql.SQL(
+                    "GRANT SELECT, INSERT, UPDATE, DELETE "
+                    "ON ALL TABLES IN SCHEMA {} TO {}",
+                ).format(schema, role),
+            )
+            cur.execute(
+                sql.SQL(
+                    "GRANT USAGE ON ALL SEQUENCES IN SCHEMA {} TO {}",
+                ).format(schema, role),
+            )
+            cur.execute(
+                sql.SQL(
+                    "ALTER DEFAULT PRIVILEGES IN SCHEMA {} "
+                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {}",
+                ).format(schema, role),
+            )
+            cur.execute(
+                sql.SQL(
+                    "ALTER DEFAULT PRIVILEGES IN SCHEMA {} "
+                    "GRANT USAGE ON SEQUENCES TO {}",
+                ).format(schema, role),
+            )
 
 
 def _revoke_access(
     cur: psycopg2.extensions.cursor,
     username: str,
+    schemas: list[str] | None = None,
 ) -> None:
-    """Revoke all schema-level privileges on the connected database."""
-    role = sql.Identifier(username)
+    """Revoke all schema-level privileges on the connected database.
 
-    cur.execute(
-        sql.SQL(
-            "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM {}",
-        ).format(role),
-    )
-    cur.execute(
-        sql.SQL(
-            "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM {}",
-        ).format(role),
-    )
-    cur.execute(
-        sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {}").format(role),
-    )
-    cur.execute(
-        sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {}").format(role),
-    )
-    cur.execute(
-        sql.SQL("REVOKE ALL ON SCHEMA public FROM {}").format(role),
-    )
+    If *schemas* is ``None``, revokes on all user schemas.
+    """
+    role = sql.Identifier(username)
+    if schemas is None:
+        schemas = _list_user_schemas(cur)
+
+    for schema_name in schemas:
+        schema = sql.Identifier(schema_name)
+        cur.execute(
+            sql.SQL(
+                "ALTER DEFAULT PRIVILEGES IN SCHEMA {} REVOKE ALL ON TABLES FROM {}",
+            ).format(schema, role),
+        )
+        cur.execute(
+            sql.SQL(
+                "ALTER DEFAULT PRIVILEGES IN SCHEMA {} REVOKE ALL ON SEQUENCES FROM {}",
+            ).format(schema, role),
+        )
+        cur.execute(
+            sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}").format(
+                schema, role,
+            ),
+        )
+        cur.execute(
+            sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA {} FROM {}").format(
+                schema, role,
+            ),
+        )
+        cur.execute(
+            sql.SQL("REVOKE ALL ON SCHEMA {} FROM {}").format(schema, role),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -143,12 +168,16 @@ def user_create_fn(
     username = spec["username"]
     db = spec["dbName"]
     access = spec["access"]
+    schemas: list[str] | None = spec.get("schemas") or None
     secret_name = spec["secretName"]
     secret_ns = spec.get("secretNamespace", namespace)
 
     validate_identifier(username)
     validate_identifier(db)
     _validate_access(access)
+    if schemas is not None:
+        for s in schemas:
+            validate_identifier(s)
 
     pg_host, pg_user, pg_password = resolve_connection_params(spec)
     password = get_existing_password(secret_ns, secret_name) or rand_pw()
@@ -183,7 +212,7 @@ def user_create_fn(
     try:
         db_conn.autocommit = True
         with db_conn.cursor() as cur:
-            _grant_access(cur, username, access)
+            _grant_access(cur, username, access, schemas)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
             f"PostgreSQL error granting on {db}: {exc}",
@@ -200,8 +229,8 @@ def user_create_fn(
         logger,
     )
 
-    logger.info("Provisioned user=%s db=%s access=%s", username, db, access)
-    return {"username": username, "database": db, "access": access, "ready": True}
+    logger.info("Provisioned user=%s db=%s access=%s schemas=%s", username, db, access, schemas)
+    return {"username": username, "database": db, "access": access, "schemas": schemas, "ready": True}
 
 
 @kopf.on.resume(CRD_GROUP, CRD_VERSION, "postgresusers")
@@ -216,6 +245,7 @@ def user_resume_fn(
     username = spec["username"]
     db = spec["dbName"]
     access = spec["access"]
+    schemas: list[str] | None = spec.get("schemas") or None
     secret_name = spec["secretName"]
     secret_ns = spec.get("secretNamespace", namespace)
 
@@ -254,8 +284,8 @@ def user_resume_fn(
     finally:
         conn.close()
 
-    logger.info("Resumed user=%s db=%s access=%s", username, db, access)
-    return {"username": username, "database": db, "access": access, "ready": True}
+    logger.info("Resumed user=%s db=%s access=%s schemas=%s", username, db, access, schemas)
+    return {"username": username, "database": db, "access": access, "schemas": schemas, "ready": True}
 
 
 @kopf.on.update(
@@ -279,12 +309,16 @@ def user_update_fn(
     username = spec["username"]
     db = spec["dbName"]
     access = spec["access"]
+    schemas: list[str] | None = spec.get("schemas") or None
     secret_name = spec["secretName"]
     secret_ns = spec.get("secretNamespace", namespace)
 
     validate_identifier(username)
     validate_identifier(db)
     _validate_access(access)
+    if schemas is not None:
+        for s in schemas:
+            validate_identifier(s)
 
     pg_host, pg_user, pg_password = resolve_connection_params(spec)
     password = get_existing_password(secret_ns, secret_name) or rand_pw()
@@ -314,13 +348,13 @@ def user_update_fn(
     finally:
         conn.close()
 
-    # Revoke old grants, apply new ones
+    # Revoke old grants (all schemas), apply new ones (specified schemas)
     db_conn = connect(pg_host, pg_user, pg_password, dbname=db)
     try:
         db_conn.autocommit = True
         with db_conn.cursor() as cur:
             _revoke_access(cur, username)
-            _grant_access(cur, username, access)
+            _grant_access(cur, username, access, schemas)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
             f"PostgreSQL error granting on {db}: {exc}",
@@ -337,8 +371,8 @@ def user_update_fn(
         logger,
     )
 
-    logger.info("Reconciled user=%s db=%s access=%s", username, db, access)
-    return {"username": username, "database": db, "access": access, "ready": True}
+    logger.info("Reconciled user=%s db=%s access=%s schemas=%s", username, db, access, schemas)
+    return {"username": username, "database": db, "access": access, "schemas": schemas, "ready": True}
 
 
 @kopf.on.delete(
@@ -358,6 +392,7 @@ def user_delete_fn(
 ) -> None:
     username = spec["username"]
     db = spec["dbName"]
+    schemas: list[str] | None = spec.get("schemas") or None
     secret_name = spec["secretName"]
     secret_ns = spec.get("secretNamespace", namespace)
 
@@ -369,7 +404,7 @@ def user_delete_fn(
         try:
             db_conn.autocommit = True
             with db_conn.cursor() as cur:
-                _revoke_access(cur, username)
+                _revoke_access(cur, username, schemas)
         finally:
             db_conn.close()
     except kopf.TemporaryError:
@@ -421,6 +456,7 @@ def user_check_drift(
     username = spec["username"]
     db = spec["dbName"]
     access = spec["access"]
+    schemas: list[str] | None = spec.get("schemas") or None
 
     pg_host, pg_user, pg_password = resolve_connection_params(spec)
 

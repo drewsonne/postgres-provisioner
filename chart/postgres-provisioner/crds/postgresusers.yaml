@@ -58,6 +58,13 @@ spec:
                   enum:
                     - read
                     - readwrite
+                schemas:
+                  type: array
+                  description: "List of schemas to grant access on. If omitted, grants on all user schemas."
+                  items:
+                    type: string
+                    pattern: "^[a-zA-Z_][a-zA-Z0-9_]{0,62}$"
+                    maxLength: 63
                 secretName:
                   type: string
                   description: "Name of the Kubernetes Secret to store credentials in."
