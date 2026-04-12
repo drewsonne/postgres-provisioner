@@ -156,7 +156,10 @@ def _ensure_secret(
         metadata=kubernetes.client.V1ObjectMeta(name=secret_name),
         string_data=data,
     )
-    kopf.adopt(secret_body)
+    # Owner references cannot cross namespaces
+    cr_namespace = body["metadata"]["namespace"]
+    if namespace == cr_namespace:
+        kopf.adopt(secret_body)
 
     try:
         v1.create_namespaced_secret(namespace=namespace, body=secret_body)
