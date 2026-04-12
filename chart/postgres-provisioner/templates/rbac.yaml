@@ -11,10 +11,10 @@ metadata:
   name: postgres-provisioner
 rules:
   - apiGroups: ["pgprovisioner.drewsonne.github.io"]
-    resources: ["postgresdatabases"]
+    resources: ["postgresdatabases", "postgresusers"]
     verbs: ["get", "list", "watch", "patch"]
   - apiGroups: ["pgprovisioner.drewsonne.github.io"]
-    resources: ["postgresdatabases/status"]
+    resources: ["postgresdatabases/status", "postgresusers/status"]
     verbs: ["get", "patch", "update"]
   - apiGroups: [""]
     resources: ["secrets"]

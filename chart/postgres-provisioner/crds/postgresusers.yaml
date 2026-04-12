@@ -1,0 +1,86 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: postgresusers.pgprovisioner.drewsonne.github.io
+spec:
+  group: pgprovisioner.drewsonne.github.io
+  scope: Namespaced
+  names:
+    plural: postgresusers
+    singular: postgresuser
+    kind: PostgresUser
+    shortNames:
+      - pguser
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Username
+          type: string
+          jsonPath: .spec.username
+        - name: Database
+          type: string
+          jsonPath: .spec.dbName
+        - name: Access
+          type: string
+          jsonPath: .spec.access
+        - name: Ready
+          type: boolean
+          jsonPath: .status.user_create_fn.ready
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              required: ["username", "dbName", "access", "secretName"]
+              properties:
+                username:
+                  type: string
+                  description: "PostgreSQL role name to create."
+                  pattern: "^[a-zA-Z_][a-zA-Z0-9_]{0,62}$"
+                  maxLength: 63
+                dbName:
+                  type: string
+                  description: "Target database to grant access on."
+                  pattern: "^[a-zA-Z_][a-zA-Z0-9_]{0,62}$"
+                  maxLength: 63
+                access:
+                  type: string
+                  description: "Permission level: read (SELECT only) or readwrite (SELECT, INSERT, UPDATE, DELETE)."
+                  enum:
+                    - read
+                    - readwrite
+                secretName:
+                  type: string
+                  description: "Name of the Kubernetes Secret to store credentials in."
+                  maxLength: 253
+                secretNamespace:
+                  type: string
+                  description: "Namespace to create the connection secret in. Defaults to the CR's namespace."
+                  maxLength: 63
+                host:
+                  type: string
+                  description: "Override the default PG_HOST for this user. If set, connects to this host instead."
+                  maxLength: 253
+                superuserSecret:
+                  type: object
+                  description: "Override the default superuser credentials."
+                  required: ["name", "namespace"]
+                  properties:
+                    name:
+                      type: string
+                      maxLength: 253
+                    namespace:
+                      type: string
+                      maxLength: 63
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
