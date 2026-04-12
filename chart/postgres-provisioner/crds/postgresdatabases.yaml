@@ -50,6 +50,10 @@ spec:
                 secretName:
                   type: string
                   maxLength: 253
+                secretNamespace:
+                  type: string
+                  description: "Namespace to create the connection secret in. Defaults to the CR's namespace."
+                  maxLength: 63
                 host:
                   type: string
                   description: "Override the default PG_HOST for this database. If set, connects to this host instead."

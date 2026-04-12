@@ -227,13 +227,14 @@ def create_fn(
     db = spec["dbName"]
     user = spec["owner"]
     secret_name = spec["secretName"]
+    secret_ns = spec.get("secretNamespace", namespace)
 
     _validate_identifier(db)
     _validate_identifier(user)
 
     pg_host, pg_user, pg_password = _resolve_connection_params(spec)
 
-    password = _get_existing_password(namespace, secret_name) or _rand_pw()
+    password = _get_existing_password(secret_ns, secret_name) or _rand_pw()
 
     conn = _connect(pg_host, pg_user, pg_password)
     try:
@@ -250,7 +251,7 @@ def create_fn(
         conn.close()
 
     _ensure_secret(
-        namespace,
+        secret_ns,
         secret_name,
         body,
         _secret_data(user, password, db, host=pg_host),
@@ -273,13 +274,14 @@ def resume_fn(
     db = spec["dbName"]
     user = spec["owner"]
     secret_name = spec["secretName"]
+    secret_ns = spec.get("secretNamespace", namespace)
 
     _validate_identifier(db)
     _validate_identifier(user)
 
     pg_host, pg_user, pg_password = _resolve_connection_params(spec)
 
-    password = _get_existing_password(namespace, secret_name)
+    password = _get_existing_password(secret_ns, secret_name)
     if password is None:
         raise kopf.TemporaryError(
             f"Secret {secret_name} not found during resume; will retry",
@@ -328,10 +330,11 @@ def delete_fn(
     **_: Any,
 ) -> None:
     secret_name = spec["secretName"]
+    secret_ns = spec.get("secretNamespace", namespace)
 
     v1 = kubernetes.client.CoreV1Api()
     try:
-        v1.delete_namespaced_secret(name=secret_name, namespace=namespace)
+        v1.delete_namespaced_secret(name=secret_name, namespace=secret_ns)
         logger.info("Deleted secret %s", secret_name)
     except kubernetes.client.exceptions.ApiException as exc:
         if exc.status != 404:
@@ -363,13 +366,14 @@ def update_fn(
     db = spec["dbName"]
     user = spec["owner"]
     secret_name = spec["secretName"]
+    secret_ns = spec.get("secretNamespace", namespace)
 
     _validate_identifier(db)
     _validate_identifier(user)
 
     pg_host, pg_user, pg_password = _resolve_connection_params(spec)
 
-    password = _get_existing_password(namespace, secret_name) or _rand_pw()
+    password = _get_existing_password(secret_ns, secret_name) or _rand_pw()
 
     conn = _connect(pg_host, pg_user, pg_password)
     try:
@@ -386,7 +390,7 @@ def update_fn(
         conn.close()
 
     _ensure_secret(
-        namespace,
+        secret_ns,
         secret_name,
         body,
         _secret_data(user, password, db, host=pg_host),
