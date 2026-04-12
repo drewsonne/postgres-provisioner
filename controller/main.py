@@ -16,6 +16,37 @@ PG_HOST = os.environ["PG_HOST"]
 PG_USER = os.environ["PG_USER"]
 PG_PASSWORD = os.environ["PG_PASSWORD"]
 
+
+def _resolve_connection_params(
+    spec: kopf.Spec,
+) -> tuple[str, str, str]:
+    """Return (host, user, password) for the target cluster.
+
+    If the CR specifies ``host`` and ``superuserSecret``, read credentials
+    from that secret.  Otherwise fall back to the global PG_HOST / PG_USER /
+    PG_PASSWORD environment variables.
+    """
+    override_host = spec.get("host")
+    override_secret = spec.get("superuserSecret")
+    if override_host and override_secret:
+        v1 = kubernetes.client.CoreV1Api()
+        try:
+            secret = v1.read_namespaced_secret(
+                name=override_secret["name"],
+                namespace=override_secret["namespace"],
+            )
+        except kubernetes.client.exceptions.ApiException as exc:
+            raise kopf.TemporaryError(
+                f"Cannot read superuser secret "
+                f"{override_secret['namespace']}/{override_secret['name']}: {exc}",
+                delay=30,
+            ) from exc
+        data = secret.data or {}
+        user = base64.b64decode(data["username"]).decode()
+        password = base64.b64decode(data["password"]).decode()
+        return override_host, user, password
+    return PG_HOST, PG_USER, PG_PASSWORD
+
 VALID_IDENTIFIER_CHARS = set(string.ascii_letters + string.digits + "_")
 
 
@@ -33,17 +64,21 @@ def _validate_identifier(value: str) -> None:
         raise kopf.PermanentError(msg)
 
 
-def _connect() -> psycopg2.extensions.connection:
+def _connect(
+    host: str = PG_HOST,
+    user: str = PG_USER,
+    password: str = PG_PASSWORD,
+) -> psycopg2.extensions.connection:
     try:
         return psycopg2.connect(
-            host=PG_HOST,
-            user=PG_USER,
-            password=PG_PASSWORD,
+            host=host,
+            user=user,
+            password=password,
             dbname="postgres",
         )
     except psycopg2.OperationalError as exc:
         raise kopf.TemporaryError(
-            f"Cannot connect to PostgreSQL: {exc}",
+            f"Cannot connect to PostgreSQL at {host}: {exc}",
             delay=30,
         ) from exc
 
@@ -141,12 +176,17 @@ def _ensure_secret(
             ) from exc
 
 
-def _secret_data(user: str, password: str, db: str) -> dict[str, str]:
+def _secret_data(
+    user: str,
+    password: str,
+    db: str,
+    host: str = PG_HOST,
+) -> dict[str, str]:
     return {
         "username": user,
         "password": password,
         "database": db,
-        "host": PG_HOST,
+        "host": host,
         "port": "5432",
     }
 
@@ -169,7 +209,12 @@ def configure(settings: kopf.OperatorSettings, **_: Any) -> None:
 
 
 @kopf.on.create(
-    "pgprovisioner.drewsonne.github.io", "v1", "postgresdatabases", retries=5, backoff=30, timeout=300
+    "pgprovisioner.drewsonne.github.io",
+    "v1",
+    "postgresdatabases",
+    retries=5,
+    backoff=30,
+    timeout=300,
 )
 def create_fn(
     spec: kopf.Spec,
@@ -186,9 +231,11 @@ def create_fn(
     _validate_identifier(db)
     _validate_identifier(user)
 
+    pg_host, pg_user, pg_password = _resolve_connection_params(spec)
+
     password = _get_existing_password(namespace, secret_name) or _rand_pw()
 
-    conn = _connect()
+    conn = _connect(pg_host, pg_user, pg_password)
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -203,7 +250,11 @@ def create_fn(
         conn.close()
 
     _ensure_secret(
-        namespace, secret_name, body, _secret_data(user, password, db), logger
+        namespace,
+        secret_name,
+        body,
+        _secret_data(user, password, db, host=pg_host),
+        logger,
     )
 
     logger.info("Provisioned database=%s owner=%s", db, user)
@@ -226,6 +277,8 @@ def resume_fn(
     _validate_identifier(db)
     _validate_identifier(user)
 
+    pg_host, pg_user, pg_password = _resolve_connection_params(spec)
+
     password = _get_existing_password(namespace, secret_name)
     if password is None:
         raise kopf.TemporaryError(
@@ -233,7 +286,7 @@ def resume_fn(
             delay=30,
         )
 
-    conn = _connect()
+    conn = _connect(pg_host, pg_user, pg_password)
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -260,7 +313,12 @@ def resume_fn(
 
 
 @kopf.on.delete(
-    "pgprovisioner.drewsonne.github.io", "v1", "postgresdatabases", retries=3, backoff=15, timeout=120
+    "pgprovisioner.drewsonne.github.io",
+    "v1",
+    "postgresdatabases",
+    retries=3,
+    backoff=15,
+    timeout=120,
 )
 def delete_fn(
     spec: kopf.Spec,
@@ -285,7 +343,12 @@ def delete_fn(
 
 
 @kopf.on.update(
-    "pgprovisioner.drewsonne.github.io", "v1", "postgresdatabases", field="spec", retries=3, backoff=15
+    "pgprovisioner.drewsonne.github.io",
+    "v1",
+    "postgresdatabases",
+    field="spec",
+    retries=3,
+    backoff=15,
 )
 def update_fn(
     spec: kopf.Spec,
@@ -304,9 +367,11 @@ def update_fn(
     _validate_identifier(db)
     _validate_identifier(user)
 
+    pg_host, pg_user, pg_password = _resolve_connection_params(spec)
+
     password = _get_existing_password(namespace, secret_name) or _rand_pw()
 
-    conn = _connect()
+    conn = _connect(pg_host, pg_user, pg_password)
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -321,14 +386,24 @@ def update_fn(
         conn.close()
 
     _ensure_secret(
-        namespace, secret_name, body, _secret_data(user, password, db), logger
+        namespace,
+        secret_name,
+        body,
+        _secret_data(user, password, db, host=pg_host),
+        logger,
     )
 
     logger.info("Reconciled database=%s owner=%s", db, user)
     return {"database": db, "owner": user, "ready": True}
 
 
-@kopf.timer("pgprovisioner.drewsonne.github.io", "v1", "postgresdatabases", interval=300, initial_delay=60)
+@kopf.timer(
+    "pgprovisioner.drewsonne.github.io",
+    "v1",
+    "postgresdatabases",
+    interval=300,
+    initial_delay=60,
+)
 def check_drift(
     spec: kopf.Spec,
     logger: kopf.Logger,
@@ -337,7 +412,9 @@ def check_drift(
     db = spec["dbName"]
     user = spec["owner"]
 
-    conn = _connect()
+    pg_host, pg_user, pg_password = _resolve_connection_params(spec)
+
+    conn = _connect(pg_host, pg_user, pg_password)
     try:
         conn.autocommit = True
         with conn.cursor() as cur:

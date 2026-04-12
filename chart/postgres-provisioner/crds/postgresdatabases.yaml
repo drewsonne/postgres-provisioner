@@ -50,6 +50,21 @@ spec:
                 secretName:
                   type: string
                   maxLength: 253
+                host:
+                  type: string
+                  description: "Override the default PG_HOST for this database. If set, connects to this host instead."
+                  maxLength: 253
+                superuserSecret:
+                  type: object
+                  description: "Override the default superuser credentials for this database."
+                  required: ["name", "namespace"]
+                  properties:
+                    name:
+                      type: string
+                      maxLength: 253
+                    namespace:
+                      type: string
+                      maxLength: 63
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true
