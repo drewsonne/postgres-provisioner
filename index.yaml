@@ -2,8 +2,18 @@ apiVersion: v1
 entries:
   postgres-provisioner:
   - apiVersion: v2
+    appVersion: 1.0.7
+    created: "2026-04-12T17:12:05.971283443Z"
+    description: Provision Postgres databases and users via CRDs
+    digest: 8e44a0600cc16f43d2317c87a3adce09dd205ecc894dd25553d7fa10bee76816
+    name: postgres-provisioner
+    type: application
+    urls:
+    - https://drewsonne.github.io/postgres-provisioner/postgres-provisioner-1.0.7.tgz
+    version: 1.0.7
+  - apiVersion: v2
     appVersion: 1.0.6
-    created: "2026-04-12T16:49:27.773914217Z"
+    created: "2026-04-12T17:12:05.970767107Z"
     description: Provision Postgres databases and users via CRDs
     digest: 007f3d3943f79437afa25c0f616600322ed69166eeef0e490a206e1dd94ba494
     name: postgres-provisioner
@@ -13,7 +23,7 @@ entries:
     version: 1.0.6
   - apiVersion: v2
     appVersion: 1.0.5
-    created: "2026-04-12T16:49:27.773638747Z"
+    created: "2026-04-12T17:12:05.970350973Z"
     description: Provision Postgres databases and users via CRDs
     digest: e56defa952bfcbf51b50a8bfdec69a9a520933c6a50403322e1365bdc28ff892
     name: postgres-provisioner
@@ -23,7 +33,7 @@ entries:
     version: 1.0.5
   - apiVersion: v2
     appVersion: 1.0.4
-    created: "2026-04-12T16:49:27.773114764Z"
+    created: "2026-04-12T17:12:05.970026665Z"
     description: Provision Postgres databases via CRD
     digest: cd8af21093dac6170bc70e0589ef4f4828f4c2db7d88fe7408b39791e480712a
     name: postgres-provisioner
@@ -33,7 +43,7 @@ entries:
     version: 1.0.4
   - apiVersion: v2
     appVersion: 1.0.3
-    created: "2026-04-12T16:49:27.772767939Z"
+    created: "2026-04-12T17:12:05.969466556Z"
     description: Provision Postgres databases via CRD
     digest: a3a4f8b094d6193b8a621a57ca525c1db18baa63ff3391ddd5e3c6d13e1ecff1
     name: postgres-provisioner
@@ -43,7 +53,7 @@ entries:
     version: 1.0.3
   - apiVersion: v2
     appVersion: 1.0.2
-    created: "2026-04-12T16:49:27.772460322Z"
+    created: "2026-04-12T17:12:05.969295633Z"
     description: Provision Postgres databases via CRD
     digest: 6f719bb5e6b2182d8ef0fc033c1d7affce417140ffd172028751522aee4c1aa5
     name: postgres-provisioner
@@ -53,7 +63,7 @@ entries:
     version: 1.0.2
   - apiVersion: v2
     appVersion: 1.0.1
-    created: "2026-04-12T16:49:27.772313134Z"
+    created: "2026-04-12T17:12:05.969084775Z"
     description: Provision Postgres databases via CRD
     digest: 0c32e0ef2b969219b98dab7624a007e31ce8f2adf0c851bc183c9b5abc837bae
     name: postgres-provisioner
@@ -63,7 +73,7 @@ entries:
     version: 1.0.1
   - apiVersion: v2
     appVersion: 1.0.0
-    created: "2026-04-12T16:49:27.772179495Z"
+    created: "2026-04-12T17:12:05.968821546Z"
     description: Provision Postgres databases via CRD
     digest: e3a79129fa0474245f425100add0332fa9d0c93f21213c7d69100c9fd5456ca4
     name: postgres-provisioner
@@ -73,7 +83,7 @@ entries:
     version: 1.0.0
   - apiVersion: v2
     appVersion: 0.1.4
-    created: "2026-04-12T16:49:27.771969774Z"
+    created: "2026-04-12T17:12:05.968650744Z"
     description: Provision Postgres databases via CRD
     digest: 7dbe1d7b39688b524135c957266bf9776700ffaba36b1809d69c1b60bca37c95
     name: postgres-provisioner
@@ -83,7 +93,7 @@ entries:
     version: 0.1.4
   - apiVersion: v2
     appVersion: 0.1.3
-    created: "2026-04-12T16:49:27.771819771Z"
+    created: "2026-04-12T17:12:05.968447332Z"
     description: Provision Postgres databases via CRD
     digest: 4404804405246fb1c5e4a7fe8fabd14a96d39cd3ed06049ca36ab2e7276a47b6
     name: postgres-provisioner
@@ -93,7 +103,7 @@ entries:
     version: 0.1.3
   - apiVersion: v2
     appVersion: 0.1.0
-    created: "2026-04-12T16:49:27.771578803Z"
+    created: "2026-04-12T17:12:05.968270727Z"
     description: Provision Postgres databases via CRD
     digest: 638c7db8fb4bbb81f237849480aae96b836e0a692f1b60837e40de50022caf34
     name: postgres-provisioner
@@ -101,4 +111,4 @@ entries:
     urls:
     - https://drewsonne.github.io/postgres-provisioner/postgres-provisioner-0.1.0.tgz
     version: 0.1.0
-generated: "2026-04-12T16:49:27.771304355Z"
+generated: "2026-04-12T17:12:05.967984299Z"
