@@ -10,6 +10,7 @@ import string
 import kopf
 import kubernetes
 import psycopg2
+import psycopg2.extensions
 
 PG_HOST = os.environ["PG_HOST"]
 PG_USER = os.environ["PG_USER"]

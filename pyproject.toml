@@ -13,6 +13,7 @@ dependencies = [
 dev = [
     "pre-commit>=4",
     "ruff>=0.11",
+    "ty>=0.0.1a7",
 ]
 
 [tool.ruff]
@@ -42,3 +43,7 @@ unfixable = []
     "PLR2004",  # magic values in status code checks
     "TRY003",   # long messages in TemporaryError are fine for kopf
 ]
+
+[tool.ty.rules]
+# kopf decorators use introspection; their type stubs don't match handler signatures
+invalid-argument-type = "warn"

@@ -6,6 +6,7 @@ from typing import Any
 
 import kopf
 import psycopg2
+import psycopg2.extensions
 from common import (
     CRD_GROUP,
     CRD_VERSION,
