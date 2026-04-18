@@ -63,7 +63,21 @@ jobs:
           # Add the new release
           cp *.tgz publish/
 
-          # Merge into existing index (--merge keeps old entries)
+          # Save existing timestamps before merge (helm repo index overwrites them)
+          if [ -f publish/index.yaml ]; then
+            python3 -c "
+          import yaml, json, pathlib
+          idx = yaml.safe_load(pathlib.Path('publish/index.yaml').read_text())
+          ts = {}
+          for name, entries in idx.get('entries', {}).items():
+              for e in entries:
+                  if 'created' in e:
+                      ts[f\"{name}-{e['version']}\"] = e['created']
+          pathlib.Path('timestamps.json').write_text(json.dumps(ts))
+          "
+          fi
+
+          # Merge into existing index (--merge keeps old entries but overwrites timestamps)
           if [ -f publish/index.yaml ]; then
             helm repo index publish \
               --url https://drewsonne.github.io/postgres-provisioner \
@@ -71,6 +85,22 @@ jobs:
           else
             helm repo index publish \
               --url https://drewsonne.github.io/postgres-provisioner
+          fi
+
+          # Restore original timestamps for existing entries
+          if [ -f timestamps.json ]; then
+            python3 -c "
+          import yaml, json, pathlib
+          ts = json.loads(pathlib.Path('timestamps.json').read_text())
+          idx_path = pathlib.Path('publish/index.yaml')
+          idx = yaml.safe_load(idx_path.read_text())
+          for name, entries in idx.get('entries', {}).items():
+              for e in entries:
+                  key = f\"{name}-{e['version']}\"
+                  if key in ts:
+                      e['created'] = ts[key]
+          idx_path.write_text(yaml.dump(idx, default_flow_style=False))
+          "
           fi
 
       - name: Generate index.html from README
