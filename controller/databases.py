@@ -262,6 +262,14 @@ def check_drift(
         with conn.cursor() as cur:
             role_ok = role_exists(cur, user)
             db_ok = database_exists(cur, db)
+            if not role_ok or not db_ok:
+                logger.warning(
+                    "Drift detected: database=%s(%s) role=%s(%s); repairing",
+                    db,
+                    db_ok,
+                    user,
+                    role_ok,
+                )
             ensure_role(cur, user, password)
             _ensure_database(cur, db, user)
     except psycopg2.Error as exc:
