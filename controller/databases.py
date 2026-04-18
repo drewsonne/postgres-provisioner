@@ -235,20 +235,33 @@ def update_fn(
 )
 def check_drift(
     spec: kopf.Spec,
+    name: str,
+    namespace: str,
+    body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,
 ) -> dict[str, Any] | None:
+    """Periodically reconcile database and owner role to repair drift."""
     db = spec["dbName"]
     user = spec["owner"]
+    secret_name = spec["secretName"]
+    secret_ns = spec.get("secretNamespace", namespace)
 
     pg_host, pg_user, pg_password = resolve_connection_params(spec)
+
+    password = get_existing_password(secret_ns, secret_name)
+    if password is None:
+        logger.warning("Secret %s not found during drift check; skipping", secret_name)
+        return None
 
     conn = connect(pg_host, pg_user, pg_password)
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
-            db_ok = database_exists(cur, db)
             role_ok = role_exists(cur, user)
+            db_ok = database_exists(cur, db)
+            ensure_role(cur, user, password)
+            _ensure_database(cur, db, user)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
             f"Drift check failed: {exc}",
@@ -257,14 +270,14 @@ def check_drift(
     finally:
         conn.close()
 
-    if not db_ok or not role_ok:
+    if not role_ok or not db_ok:
         logger.warning(
-            "Drift detected: database=%s(%s) role=%s(%s)",
+            "Drift repaired: database=%s(%s) role=%s(%s)",
             db,
             db_ok,
             user,
             role_ok,
         )
-        return {"database": db, "owner": user, "ready": False, "drift": True}
-
+    else:
+        logger.debug("Drift check OK: database=%s owner=%s", db, user)
     return None

@@ -290,7 +290,11 @@ def user_create_fn(
     )
 
     logger.info(
-        "Provisioned user=%s db=%s access=%s schemas=%s", username, db, access, schemas
+        "Provisioned user=%s db=%s access=%s schemas=%s",
+        username,
+        db,
+        access,
+        schemas,
     )
     return {
         "username": username,
@@ -353,7 +357,11 @@ def user_resume_fn(
         conn.close()
 
     logger.info(
-        "Resumed user=%s db=%s access=%s schemas=%s", username, db, access, schemas
+        "Resumed user=%s db=%s access=%s schemas=%s",
+        username,
+        db,
+        access,
+        schemas,
     )
     return {
         "username": username,
@@ -448,7 +456,11 @@ def user_update_fn(
     )
 
     logger.info(
-        "Reconciled user=%s db=%s access=%s schemas=%s", username, db, access, schemas
+        "Reconciled user=%s db=%s access=%s schemas=%s",
+        username,
+        db,
+        access,
+        schemas,
     )
     return {
         "username": username,
@@ -534,22 +546,47 @@ def user_delete_fn(
 )
 def user_check_drift(
     spec: kopf.Spec,
+    name: str,
+    namespace: str,
+    body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,
 ) -> dict[str, Any] | None:
+    """Periodically reconcile user grants to repair drift.
+
+    Re-applies role, CONNECT, and schema grants every interval.  This
+    catches schemas that were created after the initial CRD creation
+    (e.g. dbt creating a new schema) and roles that were dropped.
+    """
     username = spec["username"]
     db = spec["dbName"]
     access = spec["access"]
     schemas: list[str] | None = spec.get("schemas") or None
+    secret_name = spec["secretName"]
+    secret_ns = spec.get("secretNamespace", namespace)
 
     pg_host, pg_user, pg_password = resolve_connection_params(spec)
+    password = get_existing_password(secret_ns, secret_name)
+    if password is None:
+        logger.warning("Secret %s not found during drift check; skipping", secret_name)
+        return None
 
+    # Ensure role + CONNECT on postgres
     conn = connect(pg_host, pg_user, pg_password)
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
-            role_ok = role_exists(cur, username)
-            db_ok = database_exists(cur, db)
+            if not database_exists(cur, db):
+                logger.warning("Database %s missing during drift check; skipping", db)
+                return None
+            repaired = not role_exists(cur, username)
+            ensure_role(cur, username, password)
+            cur.execute(
+                sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                    sql.Identifier(db),
+                    sql.Identifier(username),
+                ),
+            )
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
             f"Drift check failed: {exc}",
@@ -558,20 +595,37 @@ def user_check_drift(
     finally:
         conn.close()
 
-    if not role_ok or not db_ok:
-        logger.warning(
-            "Drift detected: user=%s(%s) database=%s(%s)",
-            username,
-            role_ok,
-            db,
-            db_ok,
-        )
-        return {
-            "username": username,
-            "database": db,
-            "access": access,
-            "ready": False,
-            "drift": True,
-        }
+    # Re-apply schema grants on target DB
+    db_conn = connect(pg_host, pg_user, pg_password, dbname=db)
+    try:
+        db_conn.autocommit = True
+        with db_conn.cursor() as cur:
+            # Filter to schemas that currently exist
+            if schemas is not None:
+                cur.execute(
+                    "SELECT nspname FROM pg_namespace WHERE nspname = ANY(%s)",
+                    (schemas,),
+                )
+                existing = [row[0] for row in cur.fetchall()]
+                missing = set(schemas) - set(existing)
+                if missing:
+                    logger.info(
+                        "Schemas not yet created (will retry next cycle): %s",
+                        sorted(missing),
+                    )
+            else:
+                existing = None
+            _grant_access(cur, username, access, existing)
+    except psycopg2.Error as exc:
+        raise kopf.TemporaryError(
+            f"Drift check grant failed on {db}: {exc}",
+            delay=60,
+        ) from exc
+    finally:
+        db_conn.close()
 
+    if repaired:
+        logger.warning("Drift repaired: re-created role %s with grants", username)
+    else:
+        logger.debug("Drift check OK: user=%s db=%s", username, db)
     return None
