@@ -63,17 +63,17 @@ jobs:
           # Add the new release
           cp *.tgz publish/
 
-          # Save existing timestamps before merge (helm repo index overwrites them)
+          # Record which versions already exist (and their timestamps if present)
           if [ -f publish/index.yaml ]; then
             python3 -c "
           import yaml, json, pathlib
           idx = yaml.safe_load(pathlib.Path('publish/index.yaml').read_text())
-          ts = {}
+          existing = {}
           for name, entries in idx.get('entries', {}).items():
               for e in entries:
-                  if 'created' in e:
-                      ts[f\"{name}-{e['version']}\"] = e['created']
-          pathlib.Path('timestamps.json').write_text(json.dumps(ts))
+                  key = f\"{name}-{e['version']}\"
+                  existing[key] = e.get('created', '')
+          pathlib.Path('existing_versions.json').write_text(json.dumps(existing))
           "
           fi
 
@@ -87,18 +87,24 @@ jobs:
               --url https://drewsonne.github.io/postgres-provisioner
           fi
 
-          # Restore original timestamps for existing entries
-          if [ -f timestamps.json ]; then
+          # For pre-existing entries: restore their original timestamp if they had one,
+          # otherwise clear the bogus timestamp helm repo index assigned.
+          # New entries (not in existing_versions) keep their fresh timestamp.
+          if [ -f existing_versions.json ]; then
             python3 -c "
           import yaml, json, pathlib
-          ts = json.loads(pathlib.Path('timestamps.json').read_text())
+          existing = json.loads(pathlib.Path('existing_versions.json').read_text())
           idx_path = pathlib.Path('publish/index.yaml')
           idx = yaml.safe_load(idx_path.read_text())
           for name, entries in idx.get('entries', {}).items():
               for e in entries:
                   key = f\"{name}-{e['version']}\"
-                  if key in ts:
-                      e['created'] = ts[key]
+                  if key in existing:
+                      saved = existing[key]
+                      if saved:
+                          e['created'] = saved
+                      else:
+                          e.pop('created', None)
           idx_path.write_text(yaml.dump(idx, default_flow_style=False))
           "
           fi
@@ -180,7 +186,7 @@ jobs:
           # Build releases table from index.yaml
           idx = yaml.safe_load(pathlib.Path("publish/index.yaml").read_text())
           entries = idx.get("entries", {}).get("postgres-provisioner", [])
-          entries.sort(key=lambda e: e.get("created", ""), reverse=True)
+          entries.sort(key=lambda e: [int(x) for x in e.get("version", "0").split(".")], reverse=True)
 
           releases_html = """
           <h2>Helm Chart Releases</h2>
@@ -191,7 +197,8 @@ jobs:
           for e in entries:
               ver = html.escape(str(e.get("version", "")))
               app_ver = html.escape(str(e.get("appVersion", "")))
-              created = html.escape(str(e.get("created", ""))[:19])
+              raw_created = e.get("created", "")
+              created = html.escape(str(raw_created)[:19]) if raw_created else ""
               url = e.get("urls", [""])[0]
               fname = url.rsplit("/", 1)[-1] if url else ""
               releases_html += f'  <tr><td>{ver}</td><td>{app_ver}</td><td>{created}</td>'
