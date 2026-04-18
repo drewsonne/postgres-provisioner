@@ -8,3 +8,37 @@ dependencies = [
     "psycopg2-binary>=2.9,<3",
     "kubernetes>=31,<33",
 ]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4",
+    "ruff>=0.11",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "ANN204",  # missing return type for __init__
+    "COM812",  # trailing comma (formatter handles)
+    "D203",    # one-blank-line-before-class (conflicts with D211)
+    "D213",    # multi-line-summary-second-line (conflicts with D212)
+]
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+"controller/**/*.py" = [
+    "ANN401",   # kopf passes Any for body/spec/status
+    "ARG001",   # kopf handlers have required unused params (body, spec, namespace, etc.)
+    "D103",     # kopf handlers don't need docstrings
+    "EM102",    # f-string in TemporaryError is fine for kopf
+    "INP001",   # controller/ is not a package
+    "PLC0415",  # imports inside handlers to avoid circular deps
+    "PLR0913",  # kopf handlers have many params by design
+    "PLR2004",  # magic values in status code checks
+    "TRY003",   # long messages in TemporaryError are fine for kopf
+]

@@ -583,9 +583,7 @@ def user_check_drift(
                 return None
             repaired = not role_exists(cur, username)
             if repaired:
-                logger.warning(
-                    "Drift detected: role %s missing; repairing", username
-                )
+                logger.warning("Drift detected: role %s missing; repairing", username)
             ensure_role(cur, username, password)
             cur.execute(
                 sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
