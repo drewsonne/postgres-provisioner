@@ -251,8 +251,10 @@ def check_drift(
 
     password = get_existing_password(secret_ns, secret_name)
     if password is None:
-        logger.warning("Secret %s not found during drift check; skipping", secret_name)
-        return None
+        raise kopf.TemporaryError(
+            f"Secret {secret_name} not found during drift check; will retry",
+            delay=30,
+        )
 
     conn = connect(pg_host, pg_user, pg_password)
     try:
