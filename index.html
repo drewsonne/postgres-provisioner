@@ -27,7 +27,7 @@
 <h2>What it does</h2>
 <p>The operator manages two CRD kinds:</p>
 <p>| Kind | What it provisions |</p>
-<p>|---|---|</p>
+<p>| --- | --- |</p>
 <p>| <code>PostgresDatabase</code> | A PostgreSQL database and owner role, with credentials stored in a K8s Secret |</p>
 <p>| <code>PostgresUser</code> | A read-only or read-write user in an existing database, with schema-level grants stored in a K8s Secret |</p>
 <p>All resources are reconciled continuously — the operator detects and repairs out-of-band drift every 5 minutes.</p>
@@ -119,7 +119,7 @@ spec:
 </code></pre>
 <p><code>access</code> values:</p>
 <p>| Value | Grants |</p>
-<p>|---|---|</p>
+<p>| --- | --- |</p>
 <p>| <code>read</code> | <code>USAGE</code> on schemas, <code>SELECT</code> on all tables, <code>ALTER DEFAULT PRIVILEGES</code> for SELECT |</p>
 <p>| <code>readwrite</code> | <code>USAGE + CREATE</code> on schemas, <code>SELECT/INSERT/UPDATE/DELETE</code> on tables, <code>USAGE</code> on sequences, <code>ALTER DEFAULT PRIVILEGES</code> for DML + sequences |</p>
 <hr>
@@ -187,6 +187,7 @@ docker run --rm \
 <table>
   <thead><tr><th>Version</th><th>App Version</th><th>Created</th><th>Download</th></tr></thead>
   <tbody>
+  <tr><td>1.0.18</td><td>1.0.18</td><td>2026-04-19T16:26:23</td><td><a href="postgres-provisioner-1.0.18.tgz">postgres-provisioner-1.0.18.tgz</a></td></tr>
   <tr><td>1.0.17</td><td>1.0.17</td><td>2026-04-19T16:21:58</td><td><a href="postgres-provisioner-1.0.17.tgz">postgres-provisioner-1.0.17.tgz</a></td></tr>
   <tr><td>1.0.16</td><td>1.0.16</td><td>2026-04-19T16:02:29</td><td><a href="postgres-provisioner-1.0.16.tgz">postgres-provisioner-1.0.16.tgz</a></td></tr>
   <tr><td>1.0.15</td><td>1.0.15</td><td>2026-04-18T20:04:07</td><td><a href="postgres-provisioner-1.0.15.tgz">postgres-provisioner-1.0.15.tgz</a></td></tr>
