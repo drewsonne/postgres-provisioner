@@ -27,6 +27,9 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.create_fn.ready
+        - name: Drift
+          type: boolean
+          jsonPath: .status.check_drift.drift
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

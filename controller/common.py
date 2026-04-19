@@ -6,6 +6,7 @@ import base64
 import os
 import secrets
 import string
+from typing import Any
 
 import kopf
 import kubernetes
@@ -20,6 +21,11 @@ VALID_IDENTIFIER_CHARS = set(string.ascii_letters + string.digits + "_")
 
 CRD_GROUP = "pgprovisioner.drewsonne.github.io"
 CRD_VERSION = "v1"
+
+_KIND_PLURALS: dict[str, str] = {
+    "PostgresDatabase": "postgresdatabases",
+    "PostgresUser": "postgresusers",
+}
 
 
 def rand_pw(length: int = 24) -> str:
@@ -75,13 +81,18 @@ def connect(
     password: str = PG_PASSWORD,
     dbname: str = "postgres",
 ) -> psycopg2.extensions.connection:
-    """Open an autocommit connection, retrying via TemporaryError on failure."""
+    """Open an autocommit connection, retrying via TemporaryError on failure.
+
+    connect_timeout=10 ensures a dead host fails fast rather than hanging
+    the handler thread for the OS TCP timeout (often minutes).
+    """
     try:
         return psycopg2.connect(
             host=host,
             user=user,
             password=password,
             dbname=dbname,
+            connect_timeout=10,
         )
     except psycopg2.OperationalError as exc:
         raise kopf.TemporaryError(
@@ -156,7 +167,12 @@ def ensure_secret(
     data: dict[str, str],
     logger: kopf.Logger,
 ) -> None:
-    """Create or update a Kubernetes Secret with the supplied data."""
+    """Create or update a Kubernetes Secret with the supplied data.
+
+    Skips the patch if the secret already exists with identical values to
+    avoid churning the secret's resourceVersion, which would require pod
+    restarts to pick up the new env vars.
+    """
     v1 = kubernetes.client.CoreV1Api()
     secret_body = kubernetes.client.V1Secret(
         metadata=kubernetes.client.V1ObjectMeta(name=secret_name),
@@ -172,6 +188,16 @@ def ensure_secret(
         logger.info("Created secret %s", secret_name)
     except kubernetes.client.exceptions.ApiException as exc:
         if exc.status == 409:
+            existing = v1.read_namespaced_secret(name=secret_name, namespace=namespace)
+            existing_data = {
+                k: base64.b64decode(v).decode()
+                for k, v in (existing.data or {}).items()
+            }
+            if existing_data == data:
+                logger.debug(
+                    "Secret %s already up-to-date, skipping patch", secret_name
+                )
+                return
             v1.patch_namespaced_secret(
                 name=secret_name,
                 namespace=namespace,
@@ -218,3 +244,80 @@ def delete_secret(
                 delay=15,
             ) from exc
         logger.info("Secret %s already absent", secret_name)
+
+
+def set_database_owner_reference(
+    body: kopf.Body,
+    namespace: str,
+    db_name: str,
+    logger: kopf.Logger,
+) -> None:
+    """Patch this CR's ownerReferences to point to the matching PostgresDatabase.
+
+    Enables K8s GC to cascade-delete PostgresUser CRs when the PostgresDatabase
+    CR is removed. Silently skips if no matching PostgresDatabase is found.
+    """
+    custom = kubernetes.client.CustomObjectsApi()
+    try:
+        db_list = custom.list_namespaced_custom_object(
+            group=CRD_GROUP,
+            version=CRD_VERSION,
+            namespace=namespace,
+            plural="postgresdatabases",
+        )
+    except kubernetes.client.exceptions.ApiException as exc:
+        logger.warning("Could not list PostgresDatabase objects: %s", exc)
+        return
+
+    db_obj = next(
+        (
+            d
+            for d in db_list.get("items", [])
+            if d.get("spec", {}).get("dbName") == db_name
+        ),
+        None,
+    )
+    if db_obj is None:
+        logger.debug(
+            "No PostgresDatabase found for dbName=%r in namespace %s"
+            " — skipping owner ref",
+            db_name,
+            namespace,
+        )
+        return
+
+    owner_uid = db_obj["metadata"]["uid"]
+    existing_owners: list[dict[str, Any]] = body.get("metadata", {}).get(
+        "ownerReferences", []
+    )
+    if any(o.get("uid") == owner_uid for o in existing_owners):
+        return  # already set
+
+    owner_ref = {
+        "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
+        "kind": "PostgresDatabase",
+        "name": db_obj["metadata"]["name"],
+        "uid": owner_uid,
+        "blockOwnerDeletion": True,
+        "controller": True,
+    }
+    cr_name = body["metadata"]["name"]
+    cr_plural = _KIND_PLURALS.get(str(body.get("kind", "")), "")
+
+    try:
+        custom.patch_namespaced_custom_object(
+            group=CRD_GROUP,
+            version=CRD_VERSION,
+            namespace=namespace,
+            plural=cr_plural,
+            name=cr_name,
+            body={"metadata": {"ownerReferences": [owner_ref]}},
+        )
+        logger.info(
+            "Set ownerReference: %s/%s → PostgresDatabase/%s",
+            cr_plural,
+            cr_name,
+            db_obj["metadata"]["name"],
+        )
+    except kubernetes.client.exceptions.ApiException as exc:
+        logger.warning("Failed to set ownerReference: %s", exc)

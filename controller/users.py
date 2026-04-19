@@ -20,6 +20,7 @@ from common import (
     resolve_connection_params,
     role_exists,
     secret_data,
+    set_database_owner_reference,
     validate_identifier,
 )
 from psycopg2 import sql
@@ -87,14 +88,12 @@ def _grant_access(
                     "GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}",
                 ).format(schema, role),
             )
-            # Default privileges for current user (postgres)
             cur.execute(
                 sql.SQL(
                     "ALTER DEFAULT PRIVILEGES IN SCHEMA {} "
                     "GRANT SELECT ON TABLES TO {}",
                 ).format(schema, role),
             )
-            # Default privileges for each role that owns objects in the schema
             for owner in owners:
                 cur.execute(
                     sql.SQL(
@@ -118,7 +117,6 @@ def _grant_access(
                     "GRANT USAGE ON ALL SEQUENCES IN SCHEMA {} TO {}",
                 ).format(schema, role),
             )
-            # Default privileges for current user (postgres)
             cur.execute(
                 sql.SQL(
                     "ALTER DEFAULT PRIVILEGES IN SCHEMA {} "
@@ -131,7 +129,6 @@ def _grant_access(
                     "GRANT USAGE ON SEQUENCES TO {}",
                 ).format(schema, role),
             )
-            # Default privileges for each role that owns objects in the schema
             for owner in owners:
                 cur.execute(
                     sql.SQL(
@@ -163,7 +160,6 @@ def _revoke_access(
     for schema_name in schemas:
         schema = sql.Identifier(schema_name)
         owners = _schema_owners(cur, schema_name)
-        # Revoke default privileges for current user
         cur.execute(
             sql.SQL(
                 "ALTER DEFAULT PRIVILEGES IN SCHEMA {} REVOKE ALL ON TABLES FROM {}",
@@ -174,7 +170,6 @@ def _revoke_access(
                 "ALTER DEFAULT PRIVILEGES IN SCHEMA {} REVOKE ALL ON SEQUENCES FROM {}",
             ).format(schema, role),
         )
-        # Revoke default privileges for each object-owning role
         for owner in owners:
             cur.execute(
                 sql.SQL(
@@ -205,27 +200,19 @@ def _revoke_access(
         )
 
 
-# ---------------------------------------------------------------------------
-# Handlers
-# ---------------------------------------------------------------------------
-
-
-@kopf.on.create(
-    CRD_GROUP,
-    CRD_VERSION,
-    "postgresusers",
-    retries=5,
-    backoff=30,
-    timeout=300,
-)
-def user_create_fn(
+def _upsert_user(
     spec: kopf.Spec,
-    name: str,
     namespace: str,
     body: kopf.Body,
     logger: kopf.Logger,
-    **_: Any,
+    *,
+    revoke_first: bool = False,
 ) -> dict[str, Any]:
+    """Ensure the user role, CONNECT grant, and schema grants match spec.
+
+    Called from create, resume, and update handlers.
+    Set revoke_first=True on updates to clear stale grants before re-applying.
+    """
     username = spec["username"]
     db = spec["dbName"]
     access = spec["access"]
@@ -243,7 +230,7 @@ def user_create_fn(
     pg_host, pg_user, pg_password = resolve_connection_params(spec)
     password = get_existing_password(secret_ns, secret_name) or rand_pw()
 
-    # --- connect to 'postgres' to create role + verify DB exists ---
+    # Connect to postgres to ensure role + CONNECT grant
     conn = connect(pg_host, pg_user, pg_password)
     try:
         conn.autocommit = True
@@ -261,23 +248,21 @@ def user_create_fn(
                 ),
             )
     except psycopg2.Error as exc:
-        raise kopf.TemporaryError(
-            f"PostgreSQL error: {exc}",
-            delay=30,
-        ) from exc
+        raise kopf.TemporaryError(f"PostgreSQL error: {exc}", delay=30) from exc
     finally:
         conn.close()
 
-    # --- connect to target DB to set schema-level grants ---
+    # Connect to target DB for schema-level grants
     db_conn = connect(pg_host, pg_user, pg_password, dbname=db)
     try:
         db_conn.autocommit = True
         with db_conn.cursor() as cur:
+            if revoke_first:
+                _revoke_access(cur, username)
             _grant_access(cur, username, access, schemas)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
-            f"PostgreSQL error granting on {db}: {exc}",
-            delay=30,
+            f"PostgreSQL error granting on {db}: {exc}", delay=30
         ) from exc
     finally:
         db_conn.close()
@@ -306,71 +291,45 @@ def user_create_fn(
     }
 
 
+# ---------------------------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------------------------
+
+
+@kopf.on.create(
+    CRD_GROUP,
+    CRD_VERSION,
+    "postgresusers",
+    retries=5,
+    backoff=30,
+    timeout=300,
+)
+def user_create_fn(
+    spec: kopf.Spec,
+    name: str,
+    namespace: str,
+    body: kopf.Body,
+    logger: kopf.Logger,
+    **_: Any,
+) -> dict[str, Any]:
+    result = _upsert_user(spec, namespace, body, logger)
+    set_database_owner_reference(body, namespace, spec["dbName"], logger)
+    return result
+
+
 @kopf.on.resume(CRD_GROUP, CRD_VERSION, "postgresusers")
 def user_resume_fn(
     spec: kopf.Spec,
     name: str,
     namespace: str,
+    body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,
 ) -> dict[str, Any]:
-    """Re-verify resources exist on operator restart."""
-    username = spec["username"]
-    db = spec["dbName"]
-    access = spec["access"]
-    schemas: list[str] | None = spec.get("schemas") or None
-    secret_name = spec["secretName"]
-    secret_ns = spec.get("secretNamespace", namespace)
-
-    validate_identifier(username)
-    validate_identifier(db)
-    _validate_access(access)
-
-    pg_host, pg_user, pg_password = resolve_connection_params(spec)
-
-    password = get_existing_password(secret_ns, secret_name)
-    if password is None:
-        raise kopf.TemporaryError(
-            f"Secret {secret_name} not found during resume; will retry",
-            delay=30,
-        )
-
-    conn = connect(pg_host, pg_user, pg_password)
-    try:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            if not role_exists(cur, username):
-                raise kopf.TemporaryError(
-                    f"Role {username} missing during resume; will retry",
-                    delay=30,
-                )
-            if not database_exists(cur, db):
-                raise kopf.TemporaryError(
-                    f"Database {db} missing during resume; will retry",
-                    delay=30,
-                )
-    except psycopg2.Error as exc:
-        raise kopf.TemporaryError(
-            f"PostgreSQL error: {exc}",
-            delay=30,
-        ) from exc
-    finally:
-        conn.close()
-
-    logger.info(
-        "Resumed user=%s db=%s access=%s schemas=%s",
-        username,
-        db,
-        access,
-        schemas,
-    )
-    return {
-        "username": username,
-        "database": db,
-        "access": access,
-        "schemas": schemas,
-        "ready": True,
-    }
+    """Re-verify and recreate resources if missing on operator restart."""
+    result = _upsert_user(spec, namespace, body, logger)
+    set_database_owner_reference(body, namespace, spec["dbName"], logger)
+    return result
 
 
 @kopf.on.update(
@@ -387,89 +346,10 @@ def user_update_fn(
     namespace: str,
     body: kopf.Body,
     logger: kopf.Logger,
-    old: Any,
-    new: Any,
     **_: Any,
 ) -> dict[str, Any]:
-    username = spec["username"]
-    db = spec["dbName"]
-    access = spec["access"]
-    schemas: list[str] | None = spec.get("schemas") or None
-    secret_name = spec["secretName"]
-    secret_ns = spec.get("secretNamespace", namespace)
-
-    validate_identifier(username)
-    validate_identifier(db)
-    _validate_access(access)
-    if schemas is not None:
-        for s in schemas:
-            validate_identifier(s)
-
-    pg_host, pg_user, pg_password = resolve_connection_params(spec)
-    password = get_existing_password(secret_ns, secret_name) or rand_pw()
-
-    # Ensure role + CONNECT
-    conn = connect(pg_host, pg_user, pg_password)
-    try:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            if not database_exists(cur, db):
-                raise kopf.TemporaryError(
-                    f"Database {db} does not exist yet; will retry",
-                    delay=30,
-                )
-            ensure_role(cur, username, password)
-            cur.execute(
-                sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
-                    sql.Identifier(db),
-                    sql.Identifier(username),
-                ),
-            )
-    except psycopg2.Error as exc:
-        raise kopf.TemporaryError(
-            f"PostgreSQL error: {exc}",
-            delay=30,
-        ) from exc
-    finally:
-        conn.close()
-
-    # Revoke old grants (all schemas), apply new ones (specified schemas)
-    db_conn = connect(pg_host, pg_user, pg_password, dbname=db)
-    try:
-        db_conn.autocommit = True
-        with db_conn.cursor() as cur:
-            _revoke_access(cur, username)
-            _grant_access(cur, username, access, schemas)
-    except psycopg2.Error as exc:
-        raise kopf.TemporaryError(
-            f"PostgreSQL error granting on {db}: {exc}",
-            delay=30,
-        ) from exc
-    finally:
-        db_conn.close()
-
-    ensure_secret(
-        secret_ns,
-        secret_name,
-        body,
-        secret_data(username, password, db, host=pg_host),
-        logger,
-    )
-
-    logger.info(
-        "Reconciled user=%s db=%s access=%s schemas=%s",
-        username,
-        db,
-        access,
-        schemas,
-    )
-    return {
-        "username": username,
-        "database": db,
-        "access": access,
-        "schemas": schemas,
-        "ready": True,
-    }
+    # revoke_first=True clears stale grants before applying the new access level
+    return _upsert_user(spec, namespace, body, logger, revoke_first=True)
 
 
 @kopf.on.delete(
@@ -544,6 +424,7 @@ def user_delete_fn(
     "postgresusers",
     interval=300,
     initial_delay=60,
+    idle=30,
 )
 def user_check_drift(
     spec: kopf.Spec,
@@ -555,9 +436,9 @@ def user_check_drift(
 ) -> dict[str, Any] | None:
     """Periodically reconcile user grants to repair drift.
 
-    Re-applies role, CONNECT, and schema grants every interval.  This
-    catches schemas that were created after the initial CRD creation
-    (e.g. dbt creating a new schema) and roles that were dropped.
+    Re-applies role, CONNECT, and schema grants every interval. This catches
+    schemas created after the initial CRD creation (e.g. dbt adding a schema)
+    and roles that were dropped out-of-band.
     """
     username = spec["username"]
     db = spec["dbName"]
@@ -582,8 +463,8 @@ def user_check_drift(
             if not database_exists(cur, db):
                 logger.warning("Database %s missing during drift check; skipping", db)
                 return None
-            repaired = not role_exists(cur, username)
-            if repaired:
+            role_missing = not role_exists(cur, username)
+            if role_missing:
                 logger.warning("Drift detected: role %s missing; repairing", username)
             ensure_role(cur, username, password)
             cur.execute(
@@ -593,10 +474,7 @@ def user_check_drift(
                 ),
             )
     except psycopg2.Error as exc:
-        raise kopf.TemporaryError(
-            f"Drift check failed: {exc}",
-            delay=60,
-        ) from exc
+        raise kopf.TemporaryError(f"Drift check failed: {exc}", delay=60) from exc
     finally:
         conn.close()
 
@@ -605,32 +483,31 @@ def user_check_drift(
     try:
         db_conn.autocommit = True
         with db_conn.cursor() as cur:
-            # Filter to schemas that currently exist
             if schemas is not None:
                 cur.execute(
                     "SELECT nspname FROM pg_namespace WHERE nspname = ANY(%s)",
                     (schemas,),
                 )
                 existing = [row[0] for row in cur.fetchall()]
-                missing = set(schemas) - set(existing)
-                if missing:
+                missing_schemas = set(schemas) - set(existing)
+                if missing_schemas:
                     logger.info(
                         "Schemas not yet created (will retry next cycle): %s",
-                        sorted(missing),
+                        sorted(missing_schemas),
                     )
             else:
                 existing = None
             _grant_access(cur, username, access, existing)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
-            f"Drift check grant failed on {db}: {exc}",
-            delay=60,
+            f"Drift check grant failed on {db}: {exc}", delay=60
         ) from exc
     finally:
         db_conn.close()
 
-    if repaired:
+    if role_missing:
         logger.warning("Drift repaired: re-created role %s with grants", username)
-    else:
-        logger.debug("Drift check OK: user=%s db=%s", username, db)
+        return {"drift": True, "driftReason": "role_missing", "ready": True}
+
+    logger.debug("Drift check OK: user=%s db=%s", username, db)
     return None
