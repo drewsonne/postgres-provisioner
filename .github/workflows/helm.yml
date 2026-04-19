@@ -119,14 +119,60 @@ jobs:
           readme = pathlib.Path("README.md").read_text()
 
           # Convert Markdown to basic HTML
+          def inline(text: str) -> str:
+              """Apply inline formatting: backtick code, bold, links."""
+              text = re.sub(r"`([^`]+)`", r"<code>\1</code>", html.escape(text))
+              text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
+              return text
+
+          def is_table_row(line: str) -> bool:
+              return line.strip().startswith("|") and line.strip().endswith("|")
+
+          def is_separator_row(line: str) -> bool:
+              return bool(re.match(r"^\|[\s\-|]+\|$", line.strip()))
+
+          def parse_cells(line: str) -> list:
+              cells = line.strip().strip("|").split("|")
+              return [c.strip() for c in cells]
+
+          def flush_table(table_lines: list, out: list) -> None:
+              if not table_lines:
+                  return
+              out.append("<table>")
+              header_done = False
+              in_tbody = False
+              for row in table_lines:
+                  if is_separator_row(row):
+                      out.append("  </thead><tbody>")
+                      in_tbody = True
+                      continue
+                  cells = parse_cells(row)
+                  if not header_done and not in_tbody:
+                      out.append("  <thead><tr>")
+                      for c in cells:
+                          out.append(f"    <th>{inline(c)}</th>")
+                      out.append("  </tr>")
+                      header_done = True
+                  else:
+                      out.append("  <tr>")
+                      for c in cells:
+                          out.append(f"    <td>{inline(c)}</td>")
+                      out.append("  </tr>")
+              if in_tbody:
+                  out.append("  </tbody>")
+              out.append("</table>")
+
           def md_to_html(md: str) -> str:
               lines = md.split("\n")
               out = []
               in_code = False
               in_list = False
+              table_buf: list = []
               for line in lines:
                   # Fenced code blocks
                   if line.startswith("```"):
+                      flush_table(table_buf, out)
+                      table_buf = []
                       if in_list:
                           out.append("</ul>")
                           in_list = False
@@ -141,6 +187,16 @@ jobs:
                   if in_code:
                       out.append(html.escape(line))
                       continue
+                  # Table rows
+                  if is_table_row(line):
+                      if in_list:
+                          out.append("</ul>")
+                          in_list = False
+                      table_buf.append(line)
+                      continue
+                  else:
+                      flush_table(table_buf, out)
+                      table_buf = []
                   # Blank / separator
                   if line.strip() == "" or line.strip() == "---":
                       if in_list:
@@ -164,17 +220,14 @@ jobs:
                       if not in_list:
                           out.append("<ul>")
                           in_list = True
-                      text = m.group(1)
-                      # Inline code
-                      text = re.sub(r"`([^`]+)`", r"<code>\1</code>", html.escape(text))
-                      out.append(f"  <li>{text}</li>")
+                      out.append(f"  <li>{inline(m.group(1))}</li>")
                       continue
                   # Paragraph text
                   if in_list:
                       out.append("</ul>")
                       in_list = False
-                  text = re.sub(r"`([^`]+)`", r"<code>\1</code>", html.escape(line))
-                  out.append(f"<p>{text}</p>")
+                  out.append(f"<p>{inline(line)}</p>")
+              flush_table(table_buf, out)
               if in_list:
                   out.append("</ul>")
               if in_code:
