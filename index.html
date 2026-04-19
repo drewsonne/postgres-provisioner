@@ -26,10 +26,22 @@
 <hr>
 <h2>What it does</h2>
 <p>The operator manages two CRD kinds:</p>
-<p>| Kind | What it provisions |</p>
-<p>| --- | --- |</p>
-<p>| <code>PostgresDatabase</code> | A PostgreSQL database and owner role, with credentials stored in a K8s Secret |</p>
-<p>| <code>PostgresUser</code> | A read-only or read-write user in an existing database, with schema-level grants stored in a K8s Secret |</p>
+<table>
+  <thead><tr>
+    <th>Kind</th>
+    <th>What it provisions</th>
+  </tr>
+  </thead><tbody>
+  <tr>
+    <td><code>PostgresDatabase</code></td>
+    <td>A PostgreSQL database and owner role, with credentials stored in a K8s Secret</td>
+  </tr>
+  <tr>
+    <td><code>PostgresUser</code></td>
+    <td>A read-only or read-write user in an existing database, with schema-level grants stored in a K8s Secret</td>
+  </tr>
+  </tbody>
+</table>
 <p>All resources are reconciled continuously — the operator detects and repairs out-of-band drift every 5 minutes.</p>
 <hr>
 <h2>Architecture</h2>
@@ -118,10 +130,22 @@ spec:
   secretNamespace: my-app        # optional; defaults to CR namespace
 </code></pre>
 <p><code>access</code> values:</p>
-<p>| Value | Grants |</p>
-<p>| --- | --- |</p>
-<p>| <code>read</code> | <code>USAGE</code> on schemas, <code>SELECT</code> on all tables, <code>ALTER DEFAULT PRIVILEGES</code> for SELECT |</p>
-<p>| <code>readwrite</code> | <code>USAGE + CREATE</code> on schemas, <code>SELECT/INSERT/UPDATE/DELETE</code> on tables, <code>USAGE</code> on sequences, <code>ALTER DEFAULT PRIVILEGES</code> for DML + sequences |</p>
+<table>
+  <thead><tr>
+    <th>Value</th>
+    <th>Grants</th>
+  </tr>
+  </thead><tbody>
+  <tr>
+    <td><code>read</code></td>
+    <td><code>USAGE</code> on schemas, <code>SELECT</code> on all tables, <code>ALTER DEFAULT PRIVILEGES</code> for SELECT</td>
+  </tr>
+  <tr>
+    <td><code>readwrite</code></td>
+    <td><code>USAGE + CREATE</code> on schemas, <code>SELECT/INSERT/UPDATE/DELETE</code> on tables, <code>USAGE</code> on sequences, <code>ALTER DEFAULT PRIVILEGES</code> for DML + sequences</td>
+  </tr>
+  </tbody>
+</table>
 <hr>
 <h2>Per-CR credential override</h2>
 <p>Every CR accepts an optional <code>host</code> and <code>superuserSecret</code> to use a different PostgreSQL cluster (useful for multi-tenant setups):</p>
@@ -148,14 +172,14 @@ kubectl get secret my-app-db-credentials -n my-app -o yaml
 <hr>
 <h2>Behaviour notes</h2>
 <ul>
-  <li>**Idempotent** — safe to reapply; existing PostgreSQL resources are updated, not recreated</li>
-  <li>**Secret preservation** — if a Secret already exists, the <code>password</code> is preserved rather than regenerated</li>
-  <li>**Database safety** — deleting a <code>PostgresDatabase</code> CR removes the K8s Secret but intentionally does NOT drop the PostgreSQL database or owner role, preventing accidental data loss</li>
-  <li>**User deletion** — deleting a <code>PostgresUser</code> CR revokes all schema grants, revokes <code>CONNECT</code>, drops the role, and removes the Secret</li>
-  <li>**Schema-level grants** — <code>PostgresUser</code> grants are applied per-schema with <code>ALTER DEFAULT PRIVILEGES</code>, so future tables created in the schema are automatically accessible</li>
-  <li>**Drift detection** — a timer runs every 5 minutes to detect and repair out-of-band changes (e.g. manually dropped roles); drift is visible in <code>kubectl describe</code> as a K8s Warning event and in the <code>Drift</code> printer column</li>
-  <li>**Cascade deletion** — deleting a <code>PostgresDatabase</code> CR triggers cleanup of all child <code>PostgresUser</code> CRs before the database CR is finalised</li>
-  <li>**User/database ordering** — if a <code>PostgresUser</code> references a database that doesn&#x27;t exist yet, the controller retries automatically until it is ready</li>
+  <li><strong>Idempotent</strong> — safe to reapply; existing PostgreSQL resources are updated, not recreated</li>
+  <li><strong>Secret preservation</strong> — if a Secret already exists, the <code>password</code> is preserved rather than regenerated</li>
+  <li><strong>Database safety</strong> — deleting a <code>PostgresDatabase</code> CR removes the K8s Secret but intentionally does NOT drop the PostgreSQL database or owner role, preventing accidental data loss</li>
+  <li><strong>User deletion</strong> — deleting a <code>PostgresUser</code> CR revokes all schema grants, revokes <code>CONNECT</code>, drops the role, and removes the Secret</li>
+  <li><strong>Schema-level grants</strong> — <code>PostgresUser</code> grants are applied per-schema with <code>ALTER DEFAULT PRIVILEGES</code>, so future tables created in the schema are automatically accessible</li>
+  <li><strong>Drift detection</strong> — a timer runs every 5 minutes to detect and repair out-of-band changes (e.g. manually dropped roles); drift is visible in <code>kubectl describe</code> as a K8s Warning event and in the <code>Drift</code> printer column</li>
+  <li><strong>Cascade deletion</strong> — deleting a <code>PostgresDatabase</code> CR triggers cleanup of all child <code>PostgresUser</code> CRs before the database CR is finalised</li>
+  <li><strong>User/database ordering</strong> — if a <code>PostgresUser</code> references a database that doesn&#x27;t exist yet, the controller retries automatically until it is ready</li>
 </ul>
 <hr>
 <h2>Observability</h2>
@@ -187,6 +211,7 @@ docker run --rm \
 <table>
   <thead><tr><th>Version</th><th>App Version</th><th>Created</th><th>Download</th></tr></thead>
   <tbody>
+  <tr><td>1.0.19</td><td>1.0.19</td><td>2026-04-19T16:38:33</td><td><a href="postgres-provisioner-1.0.19.tgz">postgres-provisioner-1.0.19.tgz</a></td></tr>
   <tr><td>1.0.18</td><td>1.0.18</td><td>2026-04-19T16:26:23</td><td><a href="postgres-provisioner-1.0.18.tgz">postgres-provisioner-1.0.18.tgz</a></td></tr>
   <tr><td>1.0.17</td><td>1.0.17</td><td>2026-04-19T16:21:58</td><td><a href="postgres-provisioner-1.0.17.tgz">postgres-provisioner-1.0.17.tgz</a></td></tr>
   <tr><td>1.0.16</td><td>1.0.16</td><td>2026-04-19T16:02:29</td><td><a href="postgres-provisioner-1.0.16.tgz">postgres-provisioner-1.0.16.tgz</a></td></tr>
