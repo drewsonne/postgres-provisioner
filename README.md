@@ -11,7 +11,7 @@ Applications can request their own database, credentials, and schema-level acces
 The operator manages two CRD kinds:
 
 | Kind | What it provisions |
-|---|---|
+| --- | --- |
 | `PostgresDatabase` | A PostgreSQL database and owner role, with credentials stored in a K8s Secret |
 | `PostgresUser` | A read-only or read-write user in an existing database, with schema-level grants stored in a K8s Secret |
 
@@ -130,7 +130,7 @@ spec:
 `access` values:
 
 | Value | Grants |
-|---|---|
+| --- | --- |
 | `read` | `USAGE` on schemas, `SELECT` on all tables, `ALTER DEFAULT PRIVILEGES` for SELECT |
 | `readwrite` | `USAGE + CREATE` on schemas, `SELECT/INSERT/UPDATE/DELETE` on tables, `USAGE` on sequences, `ALTER DEFAULT PRIVILEGES` for DML + sequences |
 
