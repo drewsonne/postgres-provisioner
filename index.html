@@ -20,49 +20,55 @@
 </style>
 </head>
 <body>
-<h1>Postgres Provisioner</h1>
-<p>A lightweight Kubernetes controller that provisions PostgreSQL databases using a Custom Resource Definition (CRD).</p>
-<p>It allows applications to declaratively request their own database, user, and credentials without manual SQL or shared admin access.</p>
+<h1>postgres-provisioner</h1>
+<p>A lightweight Kubernetes operator that provisions PostgreSQL databases and users declaratively via CRDs.</p>
+<p>Applications can request their own database, credentials, and schema-level access without manual SQL or shared admin access.</p>
 <hr>
 <h2>What it does</h2>
-<p>When you create a <code>PostgresDatabase</code> resource, the controller will:</p>
-<ul>
-  <li>Create a PostgreSQL database</li>
-  <li>Create a dedicated user/role</li>
-  <li>Grant ownership of the database to that user</li>
-  <li>Store credentials in a Kubernetes Secret</li>
-</ul>
+<p>The operator manages two CRD kinds:</p>
+<p>| Kind | What it provisions |</p>
+<p>|---|---|</p>
+<p>| <code>PostgresDatabase</code> | A PostgreSQL database and owner role, with credentials stored in a K8s Secret |</p>
+<p>| <code>PostgresUser</code> | A read-only or read-write user in an existing database, with schema-level grants stored in a K8s Secret |</p>
+<p>All resources are reconciled continuously — the operator detects and repairs out-of-band drift every 5 minutes.</p>
 <hr>
 <h2>Architecture</h2>
-<ul>
-  <li>PostgreSQL cluster (e.g. CloudNativePG)</li>
-  <li>This controller (runs in Kubernetes)</li>
-  <li>CRD (<code>PostgresDatabase</code>)</li>
-  <li>Kubernetes Secrets for credentials</li>
-</ul>
+<pre><code>
+PostgresDatabase
+  └── PostgresUser    (ownerRef → Database; cascade-deleted with database)
+        └── K8s Secret (ownerRef → CR; GC&#x27;d with CR)
+</code></pre>
+<p>Deleting a <code>PostgresDatabase</code> CR triggers K8s garbage collection of all child <code>PostgresUser</code> CRs, which revoke grants and drop roles before the database CR itself is cleaned up.</p>
 <hr>
 <h2>Installation</h2>
 <p>Add the Helm repository:</p>
 <pre><code class="language-bash">
-helm repo add drewsonne https://drewsonne.github.io/postgres-provisioner
+helm repo add postgres-provisioner https://drewsonne.github.io/postgres-provisioner
 helm repo update
 </code></pre>
 <p>Install the chart:</p>
 <pre><code class="language-bash">
-helm install db-provisioner drewsonne/postgres-provisioner -n app-db
+helm install postgres-provisioner postgres-provisioner/postgres-provisioner \
+  --namespace app-db \
+  --set postgres.host=pg-rw.app-db.svc.cluster.local \
+  --set postgres.secretName=pg-superuser
 </code></pre>
 <hr>
 <h2>Requirements</h2>
-<p>You must already have:</p>
 <ul>
-  <li>A running PostgreSQL cluster</li>
-  <li>A superuser Secret accessible in the same namespace</li>
+  <li>A running PostgreSQL cluster accessible from within the cluster</li>
+  <li>A Kubernetes Secret containing PostgreSQL superuser credentials:</li>
 </ul>
-<p>Example (CloudNativePG default):</p>
-<ul>
-  <li>Service: <code>pg-rw.app-db.svc.cluster.local</code></li>
-  <li>Secret: <code>pg-superuser</code></li>
-</ul>
+<pre><code class="language-yaml">
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pg-superuser
+  namespace: app-db
+stringData:
+  username: postgres
+  password: &lt;superuser-password&gt;
+</code></pre>
 <hr>
 <h2>Configuration</h2>
 <p>Default values:</p>
@@ -77,75 +83,94 @@ postgres:
 
 namespace: app-db
 </code></pre>
-<p>Override with:</p>
-<pre><code class="language-bash">
-helm install db-provisioner \
-  drewsonne/postgres-provisioner \
-  -n app-db \
-  --set postgres.host=pg-rw.app-db.svc.cluster.local
-</code></pre>
 <hr>
 <h2>Usage</h2>
-<p>Create a database:</p>
+<h3>PostgresDatabase</h3>
+<p>Creates a PostgreSQL database, an owner role, and a K8s Secret with connection credentials.</p>
 <pre><code class="language-yaml">
 apiVersion: pgprovisioner.drewsonne.github.io/v1
 kind: PostgresDatabase
 metadata:
-  name: example
+  name: my-app-db
   namespace: app-db
 spec:
-  dbName: example_db
-  owner: example_user
-  secretName: example-secret
+  dbName: my_app
+  owner: my_app_owner
+  secretName: my-app-db-credentials
+  secretNamespace: my-app        # optional; defaults to CR namespace
 </code></pre>
-<p>Apply:</p>
-<pre><code class="language-bash">
-kubectl apply -f example.yaml
+<h3>PostgresUser</h3>
+<p>Creates a login role with <code>read</code> or <code>readwrite</code> access to an existing database. Grants are applied at the schema level (not just database level), including <code>ALTER DEFAULT PRIVILEGES</code> for future tables.</p>
+<pre><code class="language-yaml">
+apiVersion: pgprovisioner.drewsonne.github.io/v1
+kind: PostgresUser
+metadata:
+  name: my-app-reader
+  namespace: app-db
+spec:
+  username: my_app_reader
+  dbName: my_app
+  access: read                   # read | readwrite
+  schemas:                       # optional; defaults to all user schemas
+    - public
+    - analytics
+  secretName: my-app-reader-credentials
+  secretNamespace: my-app        # optional; defaults to CR namespace
+</code></pre>
+<p><code>access</code> values:</p>
+<p>| Value | Grants |</p>
+<p>|---|---|</p>
+<p>| <code>read</code> | <code>USAGE</code> on schemas, <code>SELECT</code> on all tables, <code>ALTER DEFAULT PRIVILEGES</code> for SELECT |</p>
+<p>| <code>readwrite</code> | <code>USAGE + CREATE</code> on schemas, <code>SELECT/INSERT/UPDATE/DELETE</code> on tables, <code>USAGE</code> on sequences, <code>ALTER DEFAULT PRIVILEGES</code> for DML + sequences |</p>
+<hr>
+<h2>Per-CR credential override</h2>
+<p>Every CR accepts an optional <code>host</code> and <code>superuserSecret</code> to use a different PostgreSQL cluster (useful for multi-tenant setups):</p>
+<pre><code class="language-yaml">
+spec:
+  host: other-pg-rw.other-ns.svc.cluster.local
+  superuserSecret:
+    name: other-pg-superuser
+    namespace: other-ns
 </code></pre>
 <hr>
 <h2>Output</h2>
-<p>The controller will create a Secret:</p>
-<pre><code class="language-bash">
-kubectl get secret example-secret -n app-db
-</code></pre>
-<p>Contents:</p>
+<p>Both CRDs create a Secret containing:</p>
 <ul>
-  <li><code>username</code></li>
-  <li><code>password</code></li>
-  <li><code>database</code></li>
-  <li><code>host</code></li>
-  <li><code>port</code></li>
+  <li><code>username</code> — the PostgreSQL role name</li>
+  <li><code>password</code> — the role password</li>
+  <li><code>database</code> — the target database name</li>
+  <li><code>host</code> — the PostgreSQL host</li>
+  <li><code>port</code> — <code>5432</code></li>
 </ul>
-<hr>
-<h2>Connecting to the database</h2>
-<p>Example:</p>
 <pre><code class="language-bash">
-psql -h pg-rw.app-db.svc.cluster.local \
-     -U example_user \
-     -d example_db
+kubectl get secret my-app-db-credentials -n my-app -o yaml
 </code></pre>
 <hr>
 <h2>Behaviour notes</h2>
 <ul>
-  <li>Idempotent: safe to reapply the same resource</li>
-  <li>If the Secret exists, it is updated</li>
-  <li>Password is regenerated on reconciliation (current behaviour)</li>
-  <li>Uses PostgreSQL superuser credentials internally</li>
+  <li>**Idempotent** — safe to reapply; existing PostgreSQL resources are updated, not recreated</li>
+  <li>**Secret preservation** — if a Secret already exists, the <code>password</code> is preserved rather than regenerated</li>
+  <li>**Database safety** — deleting a <code>PostgresDatabase</code> CR removes the K8s Secret but intentionally does NOT drop the PostgreSQL database or owner role, preventing accidental data loss</li>
+  <li>**User deletion** — deleting a <code>PostgresUser</code> CR revokes all schema grants, revokes <code>CONNECT</code>, drops the role, and removes the Secret</li>
+  <li>**Schema-level grants** — <code>PostgresUser</code> grants are applied per-schema with <code>ALTER DEFAULT PRIVILEGES</code>, so future tables created in the schema are automatically accessible</li>
+  <li>**Drift detection** — a timer runs every 5 minutes to detect and repair out-of-band changes (e.g. manually dropped roles); drift is visible in <code>kubectl describe</code> as a K8s Warning event and in the <code>Drift</code> printer column</li>
+  <li>**Cascade deletion** — deleting a <code>PostgresDatabase</code> CR triggers cleanup of all child <code>PostgresUser</code> CRs before the database CR is finalised</li>
+  <li>**User/database ordering** — if a <code>PostgresUser</code> references a database that doesn&#x27;t exist yet, the controller retries automatically until it is ready</li>
 </ul>
 <hr>
-<h2>Limitations (current)</h2>
-<ul>
-  <li>No delete handling (database is not dropped on CR deletion — by design)</li>
-  <li>No schema-level isolation (database-level only)</li>
-  <li>No connection pooling</li>
-</ul>
+<h2>Observability</h2>
+<pre><code class="language-bash">
+kubectl get postgresdatabases
+kubectl get postgresusers
+</code></pre>
+<p>Printer columns include <code>Ready</code>, <code>Drift</code>, and <code>Age</code>. Drift events are also emitted as Kubernetes Warning events visible via <code>kubectl describe</code>.</p>
 <hr>
 <h2>Development</h2>
 <p>Build locally:</p>
 <pre><code class="language-bash">
 docker build -t drewsonne/postgres-provisioner:dev .
 </code></pre>
-<p>Run locally (requires cluster access):</p>
+<p>Run locally (requires a reachable PostgreSQL instance):</p>
 <pre><code class="language-bash">
 docker run --rm \
   -e PG_HOST=pg-rw.app-db.svc.cluster.local \
@@ -153,23 +178,6 @@ docker run --rm \
   -e PG_PASSWORD=... \
   drewsonne/postgres-provisioner:dev
 </code></pre>
-<hr>
-<h2>Testing</h2>
-<p>1. Deploy PostgreSQL (e.g. CloudNativePG)</p>
-<p>2. Install this chart</p>
-<p>3. Apply a <code>PostgresDatabase</code> resource</p>
-<p>4. Verify:</p>
-<ul>
-  <li>Secret created</li>
-  <li>Database exists</li>
-  <li>User can connect</li>
-</ul>
-<hr>
-<h2>Roadmap / Improvements</h2>
-<ul>
-  <li>Connection pooling support</li>
-  <li>Multi-cluster / multi-tenant support</li>
-</ul>
 <hr>
 <h2>License</h2>
 <p>MIT</p>
@@ -179,6 +187,7 @@ docker run --rm \
 <table>
   <thead><tr><th>Version</th><th>App Version</th><th>Created</th><th>Download</th></tr></thead>
   <tbody>
+  <tr><td>1.0.17</td><td>1.0.17</td><td>2026-04-19T16:21:58</td><td><a href="postgres-provisioner-1.0.17.tgz">postgres-provisioner-1.0.17.tgz</a></td></tr>
   <tr><td>1.0.16</td><td>1.0.16</td><td>2026-04-19T16:02:29</td><td><a href="postgres-provisioner-1.0.16.tgz">postgres-provisioner-1.0.16.tgz</a></td></tr>
   <tr><td>1.0.15</td><td>1.0.15</td><td>2026-04-18T20:04:07</td><td><a href="postgres-provisioner-1.0.15.tgz">postgres-provisioner-1.0.15.tgz</a></td></tr>
   <tr><td>1.0.14</td><td>1.0.14</td><td>2026-04-18T19:48:20</td><td><a href="postgres-provisioner-1.0.14.tgz">postgres-provisioner-1.0.14.tgz</a></td></tr>
