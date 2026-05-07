@@ -200,6 +200,45 @@ def _revoke_access(
         )
 
 
+def _ensure_member_of(
+    cur: psycopg2.extensions.cursor,
+    username: str,
+    member_of: list[str],
+    logger: kopf.Logger,
+) -> None:
+    """Ensure *username* is a member of each role in *member_of*.
+
+    Idempotent — skips roles that don't exist yet (they may be created later)
+    and roles the user is already a member of.
+    """
+    for parent_role in member_of:
+        cur.execute(
+            "SELECT 1 FROM pg_roles WHERE rolname = %s",
+            (parent_role,),
+        )
+        if cur.fetchone() is None:
+            logger.warning(
+                "memberOf role %s does not exist yet; skipping grant",
+                parent_role,
+            )
+            continue
+        cur.execute(
+            "SELECT 1 FROM pg_auth_members am "
+            "JOIN pg_roles r ON am.roleid = r.oid "
+            "JOIN pg_roles m ON am.member = m.oid "
+            "WHERE r.rolname = %s AND m.rolname = %s",
+            (parent_role, username),
+        )
+        if cur.fetchone() is None:
+            cur.execute(
+                sql.SQL("GRANT {} TO {}").format(
+                    sql.Identifier(parent_role),
+                    sql.Identifier(username),
+                ),
+            )
+            logger.info("Granted role %s to %s", parent_role, username)
+
+
 def _upsert_user(
     spec: kopf.Spec,
     namespace: str,
@@ -217,6 +256,7 @@ def _upsert_user(
     db = spec["dbName"]
     access = spec["access"]
     schemas: list[str] | None = spec.get("schemas") or None
+    member_of: list[str] = spec.get("memberOf") or []
     secret_name = spec["secretName"]
     secret_ns = spec.get("secretNamespace", namespace)
 
@@ -226,11 +266,13 @@ def _upsert_user(
     if schemas is not None:
         for s in schemas:
             validate_identifier(s)
+    for r in member_of:
+        validate_identifier(r)
 
     pg_host, pg_user, pg_password = resolve_connection_params(spec)
     password = get_existing_password(secret_ns, secret_name) or rand_pw()
 
-    # Connect to postgres to ensure role + CONNECT grant
+    # Connect to postgres to ensure role + CONNECT grant + role memberships
     conn = connect(pg_host, pg_user, pg_password)
     try:
         conn.autocommit = True
@@ -247,6 +289,8 @@ def _upsert_user(
                     sql.Identifier(username),
                 ),
             )
+            if member_of:
+                _ensure_member_of(cur, username, member_of, logger)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(f"PostgreSQL error: {exc}", delay=30) from exc
     finally:
@@ -262,7 +306,8 @@ def _upsert_user(
             _grant_access(cur, username, access, schemas)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
-            f"PostgreSQL error granting on {db}: {exc}", delay=30
+            f"PostgreSQL error granting on {db}: {exc}",
+            delay=30,
         ) from exc
     finally:
         db_conn.close()
@@ -276,17 +321,19 @@ def _upsert_user(
     )
 
     logger.info(
-        "Provisioned user=%s db=%s access=%s schemas=%s",
+        "Provisioned user=%s db=%s access=%s schemas=%s memberOf=%s",
         username,
         db,
         access,
         schemas,
+        member_of,
     )
     return {
         "username": username,
         "database": db,
         "access": access,
         "schemas": schemas,
+        "memberOf": member_of,
         "ready": True,
     }
 
@@ -418,6 +465,47 @@ def user_delete_fn(
     delete_secret(secret_name, secret_ns, logger)
 
 
+def _drift_check_role(
+    pg_host: str,
+    pg_user: str,
+    pg_password: str,
+    username: str,
+    db: str,
+    password: str,
+    member_of: list[str],
+    logger: kopf.Logger,
+) -> bool | None:
+    """Ensure role, CONNECT, and memberOf grants on the postgres DB.
+
+    Returns True if the role was missing (drift detected), False if present,
+    or None if the database doesn't exist yet (caller should skip schema grants).
+    Raises TemporaryError on any psycopg2 failure.
+    """
+    conn = connect(pg_host, pg_user, pg_password)
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            if not database_exists(cur, db):
+                return None
+            missing = not role_exists(cur, username)
+            if missing:
+                logger.warning("Drift detected: role %s missing; repairing", username)
+            ensure_role(cur, username, password)
+            cur.execute(
+                sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                    sql.Identifier(db),
+                    sql.Identifier(username),
+                ),
+            )
+            if member_of:
+                _ensure_member_of(cur, username, member_of, logger)
+    except psycopg2.Error as exc:
+        raise kopf.TemporaryError(f"Drift check failed: {exc}", delay=60) from exc
+    finally:
+        conn.close()
+    return missing
+
+
 @kopf.timer(
     CRD_GROUP,
     CRD_VERSION,
@@ -444,6 +532,7 @@ def user_check_drift(
     db = spec["dbName"]
     access = spec["access"]
     schemas: list[str] | None = spec.get("schemas") or None
+    member_of: list[str] = spec.get("memberOf") or []
     secret_name = spec["secretName"]
     secret_ns = spec.get("secretNamespace", namespace)
 
@@ -455,28 +544,12 @@ def user_check_drift(
             delay=30,
         )
 
-    # Ensure role + CONNECT on postgres
-    conn = connect(pg_host, pg_user, pg_password)
-    try:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            if not database_exists(cur, db):
-                logger.warning("Database %s missing during drift check; skipping", db)
-                return None
-            role_missing = not role_exists(cur, username)
-            if role_missing:
-                logger.warning("Drift detected: role %s missing; repairing", username)
-            ensure_role(cur, username, password)
-            cur.execute(
-                sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
-                    sql.Identifier(db),
-                    sql.Identifier(username),
-                ),
-            )
-    except psycopg2.Error as exc:
-        raise kopf.TemporaryError(f"Drift check failed: {exc}", delay=60) from exc
-    finally:
-        conn.close()
+    role_missing = _drift_check_role(
+        pg_host, pg_user, pg_password, username, db, password, member_of, logger
+    )
+    if role_missing is None:
+        logger.warning("Database %s missing during drift check; skipping", db)
+        return None
 
     # Re-apply schema grants on target DB
     db_conn = connect(pg_host, pg_user, pg_password, dbname=db)
@@ -500,7 +573,8 @@ def user_check_drift(
             _grant_access(cur, username, access, existing)
     except psycopg2.Error as exc:
         raise kopf.TemporaryError(
-            f"Drift check grant failed on {db}: {exc}", delay=60
+            f"Drift check grant failed on {db}: {exc}",
+            delay=60,
         ) from exc
     finally:
         db_conn.close()

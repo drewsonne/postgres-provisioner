@@ -80,6 +80,13 @@ spec:
                   type: string
                   description: "Override the default PG_HOST for this user. If set, connects to this host instead."
                   maxLength: 253
+                memberOf:
+                  type: array
+                  description: "List of PostgreSQL roles to grant to this user (GRANT <role> TO <username>). Useful when the user needs to act as a role that owns objects."
+                  items:
+                    type: string
+                    pattern: "^[a-zA-Z_][a-zA-Z0-9_]{0,62}$"
+                    maxLength: 63
                 superuserSecret:
                   type: object
                   description: "Override the default superuser credentials."
