@@ -416,29 +416,36 @@ def user_delete_fn(
 ) -> None:
     username = spec["username"]
     db = spec["dbName"]
-    schemas: list[str] | None = spec.get("schemas") or None
     secret_name = spec["secretName"]
     secret_ns = spec.get("secretNamespace", namespace)
 
     pg_host, pg_user, pg_password = resolve_connection_params(spec)
 
-    # Revoke schema-level grants on target DB
+    # Reassign owned objects, drop owned, revoke CONNECT, then drop role
     try:
         db_conn = connect(pg_host, pg_user, pg_password, dbname=db)
         try:
             db_conn.autocommit = True
             with db_conn.cursor() as cur:
-                _revoke_access(cur, username, schemas)
+                if role_exists(cur, username):
+                    cur.execute(
+                        sql.SQL("REASSIGN OWNED BY {} TO {}").format(
+                            sql.Identifier(username),
+                            sql.Identifier(pg_user),
+                        ),
+                    )
+                    cur.execute(
+                        sql.SQL("DROP OWNED BY {}").format(sql.Identifier(username)),
+                    )
         finally:
             db_conn.close()
     except kopf.TemporaryError:
         logger.warning(
-            "Could not connect to database %s to revoke grants for %s",
+            "Could not connect to database %s to reassign owned objects for %s",
             db,
             username,
         )
 
-    # Revoke CONNECT + drop role
     try:
         conn = connect(pg_host, pg_user, pg_password)
         try:
@@ -545,7 +552,14 @@ def user_check_drift(
         )
 
     role_missing = _drift_check_role(
-        pg_host, pg_user, pg_password, username, db, password, member_of, logger
+        pg_host,
+        pg_user,
+        pg_password,
+        username,
+        db,
+        password,
+        member_of,
+        logger,
     )
     if role_missing is None:
         logger.warning("Database %s missing during drift check; skipping", db)
