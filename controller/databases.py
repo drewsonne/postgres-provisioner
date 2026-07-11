@@ -12,6 +12,7 @@ from common import (
     CRD_VERSION,
     connect,
     database_exists,
+    dbt_is_active,
     delete_secret,
     ensure_role,
     ensure_secret,
@@ -192,6 +193,12 @@ def check_drift(
             f"Secret {secret_name} not found during drift check; will retry",
             delay=30,
         )
+
+    if dbt_is_active(pg_host, pg_user, pg_password, db):
+        logger.info(
+            "dbt build active in %s; skipping database drift check this cycle", db
+        )
+        return None
 
     conn = connect(pg_host, pg_user, pg_password)
     try:

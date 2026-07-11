@@ -101,6 +101,36 @@ def connect(
         ) from exc
 
 
+def dbt_is_active(
+    host: str,
+    user: str,
+    password: str,
+    dbname: str,
+) -> bool:
+    """Return True when dbt is actively running statements in *dbname*.
+
+    Drift-check GRANTs race dbt's DDL in the Postgres catalogs ("tuple
+    concurrently updated") — whichever side loses aborts, and when it is a
+    dbt model the whole Dagster step fails (observed 2026-07-08: two dbt
+    full refreshes killed mid-run). dbt sets application_name='dbt', so the
+    reconcile cycle simply skips while a build is in flight; the next cycle
+    (interval 300s) picks the work back up.
+    """
+    conn = connect(host, user, password)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM pg_stat_activity"
+                " WHERE datname = %s AND application_name = 'dbt'"
+                "   AND state = 'active'",
+                (dbname,),
+            )
+            row = cur.fetchone()
+            return bool(row and row[0] > 0)
+    finally:
+        conn.close()
+
+
 def database_exists(
     cur: psycopg2.extensions.cursor,
     name: str,

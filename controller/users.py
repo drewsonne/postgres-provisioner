@@ -12,6 +12,7 @@ from common import (
     CRD_VERSION,
     connect,
     database_exists,
+    dbt_is_active,
     delete_secret,
     ensure_role,
     ensure_secret,
@@ -550,6 +551,10 @@ def user_check_drift(
             f"Secret {secret_name} not found during drift check; will retry",
             delay=30,
         )
+
+    if dbt_is_active(pg_host, pg_user, pg_password, db):
+        logger.info("dbt build active in %s; skipping user drift check this cycle", db)
+        return None
 
     role_missing = _drift_check_role(
         pg_host,
