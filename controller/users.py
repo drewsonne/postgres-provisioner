@@ -18,6 +18,7 @@ from common import (
     ensure_secret,
     get_existing_password,
     rand_pw,
+    require_namespace,
     resolve_connection_params,
     role_exists,
     secret_data,
@@ -354,29 +355,31 @@ def _upsert_user(
 )
 def user_create_fn(
     spec: kopf.Spec,
-    name: str,
-    namespace: str,
+    name: str | None,
+    namespace: str | None,
     body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,
 ) -> dict[str, Any]:
-    result = _upsert_user(spec, namespace, body, logger)
-    set_database_owner_reference(body, namespace, spec["dbName"], logger)
+    ns = require_namespace(namespace)
+    result = _upsert_user(spec, ns, body, logger)
+    set_database_owner_reference(body, ns, spec["dbName"], logger)
     return result
 
 
 @kopf.on.resume(CRD_GROUP, CRD_VERSION, "postgresusers")
 def user_resume_fn(
     spec: kopf.Spec,
-    name: str,
-    namespace: str,
+    name: str | None,
+    namespace: str | None,
     body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,
 ) -> dict[str, Any]:
     """Re-verify and recreate resources if missing on operator restart."""
-    result = _upsert_user(spec, namespace, body, logger)
-    set_database_owner_reference(body, namespace, spec["dbName"], logger)
+    ns = require_namespace(namespace)
+    result = _upsert_user(spec, ns, body, logger)
+    set_database_owner_reference(body, ns, spec["dbName"], logger)
     return result
 
 
@@ -390,14 +393,16 @@ def user_resume_fn(
 )
 def user_update_fn(
     spec: kopf.Spec,
-    name: str,
-    namespace: str,
+    name: str | None,
+    namespace: str | None,
     body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,
 ) -> dict[str, Any]:
     # revoke_first=True clears stale grants before applying the new access level
-    return _upsert_user(spec, namespace, body, logger, revoke_first=True)
+    return _upsert_user(
+        spec, require_namespace(namespace), body, logger, revoke_first=True
+    )
 
 
 @kopf.on.delete(
@@ -410,8 +415,8 @@ def user_update_fn(
 )
 def user_delete_fn(
     spec: kopf.Spec,
-    name: str,
-    namespace: str,
+    name: str | None,
+    namespace: str | None,
     logger: kopf.Logger,
     **_: Any,
 ) -> None:
@@ -524,8 +529,8 @@ def _drift_check_role(
 )
 def user_check_drift(
     spec: kopf.Spec,
-    name: str,
-    namespace: str,
+    name: str | None,
+    namespace: str | None,
     body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,

@@ -75,6 +75,18 @@ def resolve_connection_params(
     return PG_HOST, PG_USER, PG_PASSWORD
 
 
+def require_namespace(namespace: str | None) -> str:
+    """Narrow kopf's ``str | None`` namespace for namespaced-CRD handlers.
+
+    Our CRDs are namespaced, so kopf always delivers a namespace; the
+    ``None`` in its handler protocol exists for cluster-scoped resources.
+    """
+    if namespace is None:
+        msg = "namespaced CRD event delivered without a namespace"
+        raise kopf.PermanentError(msg)
+    return namespace
+
+
 def connect(
     host: str = PG_HOST,
     user: str = PG_USER,

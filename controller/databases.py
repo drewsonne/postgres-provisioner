@@ -18,6 +18,7 @@ from common import (
     ensure_secret,
     get_existing_password,
     rand_pw,
+    require_namespace,
     resolve_connection_params,
     role_exists,
     secret_data,
@@ -100,26 +101,26 @@ def _upsert_database(
 )
 def create_fn(
     spec: kopf.Spec,
-    name: str,
-    namespace: str,
+    name: str | None,
+    namespace: str | None,
     body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,
 ) -> dict[str, Any]:
-    return _upsert_database(spec, namespace, body, logger)
+    return _upsert_database(spec, require_namespace(namespace), body, logger)
 
 
 @kopf.on.resume(CRD_GROUP, CRD_VERSION, "postgresdatabases")
 def resume_fn(
     spec: kopf.Spec,
-    name: str,
-    namespace: str,
+    name: str | None,
+    namespace: str | None,
     body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,
 ) -> dict[str, Any]:
     """Re-verify and recreate resources if missing on operator restart."""
-    return _upsert_database(spec, namespace, body, logger)
+    return _upsert_database(spec, require_namespace(namespace), body, logger)
 
 
 @kopf.on.update(
@@ -132,13 +133,13 @@ def resume_fn(
 )
 def update_fn(
     spec: kopf.Spec,
-    name: str,
-    namespace: str,
+    name: str | None,
+    namespace: str | None,
     body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,
 ) -> dict[str, Any]:
-    return _upsert_database(spec, namespace, body, logger)
+    return _upsert_database(spec, require_namespace(namespace), body, logger)
 
 
 @kopf.on.delete(
@@ -151,8 +152,8 @@ def update_fn(
 )
 def delete_fn(
     spec: kopf.Spec,
-    name: str,
-    namespace: str,
+    name: str | None,
+    namespace: str | None,
     logger: kopf.Logger,
     **_: Any,
 ) -> None:
@@ -173,8 +174,8 @@ def delete_fn(
 )
 def check_drift(
     spec: kopf.Spec,
-    name: str,
-    namespace: str,
+    name: str | None,
+    namespace: str | None,
     body: kopf.Body,
     logger: kopf.Logger,
     **_: Any,
