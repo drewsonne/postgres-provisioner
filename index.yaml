@@ -2,6 +2,16 @@ apiVersion: v1
 entries:
   postgres-provisioner:
   - apiVersion: v2
+    appVersion: 1.0.26
+    created: '2026-10-25T19:18:57.681976064Z'
+    description: Provision Postgres databases and users via CRDs
+    digest: 15cb88ce66ff156f8cc6e6166fbd2cc7b54b4ba9979f1ba7a8925927990797e6
+    name: postgres-provisioner
+    type: application
+    urls:
+    - https://drewsonne.github.io/postgres-provisioner/postgres-provisioner-1.0.26.tgz
+    version: 1.0.26
+  - apiVersion: v2
     appVersion: 1.0.25
     created: '2026-07-11T17:29:11.37418441Z'
     description: Provision Postgres databases and users via CRDs
@@ -271,4 +281,4 @@ entries:
     urls:
     - https://drewsonne.github.io/postgres-provisioner/postgres-provisioner-0.1.0.tgz
     version: 0.1.0
-generated: '2026-07-11T17:29:11.370424715Z'
+generated: '2026-10-25T19:18:57.67817403Z'
