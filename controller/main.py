@@ -11,6 +11,10 @@ from typing import Any
 import databases  # noqa: F401 — registers PostgresDatabase handlers
 import kopf
 import users  # noqa: F401 — registers PostgresUser handlers
+from logs import configure_logging
+
+# kopf's CLI has already added its text handler to root; swap it for JSON.
+configure_logging()
 
 # ---------------------------------------------------------------------------
 # Operator settings
